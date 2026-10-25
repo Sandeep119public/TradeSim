@@ -383,7 +383,11 @@ export async function loadBinanceHistoricalData({
       dataset: "funding history",
       onProgress,
     });
-    funding = fundingRows.map(parseFundingRow);
+    funding = fundingRows.map(parseFundingRow).map(({ fundingTime, fundingRate, markPrice }) => ({
+      fundingTime,
+      fundingRate,
+      markPrice,
+    }));
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     warnings.push("Historical funding history unavailable: " + detail + ". Funding will not be included for this dataset.");
