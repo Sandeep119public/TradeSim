@@ -9,6 +9,9 @@
 - [x] Queue market orders for the next eligible bar open.
 - [x] Match limit orders only on future bars using explicit OHLC touch/gap assumptions.
 - [x] Add matching unit tests and a GitHub Actions test/build workflow.
+- [x] Add attached stop-loss and take-profit levels to paper orders.
+- [x] Resolve future-candle risk exits with gap-aware fills and conservative SL-first ambiguity handling.
+- [x] Add tests for SL/TP levels, gap behavior, and same-candle ambiguity.
 - [ ] Preserve and reconstruct account/order history deterministically on seek.
 - [ ] Add cancel/replace behavior and more complete closed-trade reporting.
 
@@ -22,7 +25,7 @@
 ## Milestone 3: Futures realism
 - [ ] Load tick size, quantity step, minimum quantity/notional from exchange metadata.
 - [ ] Add configurable maker/taker fee assumptions.
-- [ ] Add stop-market and attached SL/TP execution.
+- [ ] Add standalone stop-market orders and editable risk levels on an open position.
 - [ ] Integrate historical mark prices and funding events.
 - [ ] Add maintenance-margin tiers and liquidation simulation.
 - [ ] Improve fills with trade-level replay; OHLC matching is only an approximation.
