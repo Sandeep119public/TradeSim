@@ -26,25 +26,29 @@ export function historicalMarkAt(
   timestamp: number,
   sortedMarkCandles: readonly MarkPriceCandle[],
   fallback: number,
+  intervalMs: number,
 ): number {
   if (!Number.isFinite(timestamp)) throw new RangeError("Timestamp must be finite");
   if (!Number.isFinite(fallback) || fallback <= 0) {
     throw new RangeError("Fallback price must be finite and positive");
   }
+  if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+    throw new RangeError("Candle interval must be finite and positive");
+  }
 
   let low = 0;
   let high = sortedMarkCandles.length - 1;
-  let previous = -1;
+  let latestCompleted = -1;
   while (low <= high) {
     const middle = Math.floor((low + high) / 2);
     const candle = sortedMarkCandles[middle];
     if (candle.time === timestamp) return candle.open;
-    if (candle.time < timestamp) {
-      previous = middle;
+    if (candle.time + intervalMs <= timestamp) {
+      latestCompleted = middle;
       low = middle + 1;
     } else {
       high = middle - 1;
     }
   }
-  return previous >= 0 ? sortedMarkCandles[previous].close : fallback;
+  return latestCompleted >= 0 ? sortedMarkCandles[latestCompleted].close : fallback;
 }
