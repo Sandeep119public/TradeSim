@@ -1,0 +1,72 @@
+name: Live Binance Smoke Test
+
+on:
+  push:
+    branches: [feature/historical-data-range]
+    paths:
+      - ".github/workflows/live-binance-smoke.yml"
+      - "src/domain/historical-data.ts"
+      - "tests/e2e/live-binance.spec.ts"
+      - "playwright.live.config.ts"
+      - "package.json"
+  workflow_dispatch:
+    inputs:
+      symbol:
+        description: "Perpetual market to smoke-test"
+        type: choice
+        required: true
+        default: BTCUSDT
+        options:
+          - BTCUSDT
+          - SOLUSDT
+          - ETHUSDT
+      interval:
+        description: "Candle interval"
+        type: choice
+        required: true
+        default: 1m
+        options:
+          - 1m
+          - 5m
+          - 15m
+          - 1h
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-binance-smoke-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+      - name: Build and type-check
+        run: npm run build
+      - name: Install Playwright Chromium and system dependencies
+        run: npx playwright install --with-deps chromium
+      - name: Run live Binance browser smoke test
+        env:
+          TRADESIM_SMOKE_SYMBOL: ${{ inputs.symbol || 'BTCUSDT' }}
+          TRADESIM_SMOKE_INTERVAL: ${{ inputs.interval || '1m' }}
+        run: npm run test:e2e:live
+      - name: Upload Playwright traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-binance-smoke-traces
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
