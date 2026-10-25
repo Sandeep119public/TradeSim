@@ -286,15 +286,10 @@ el<HTMLButtonElement>("submit").addEventListener("click", () => {
   try {
     const candle = snapshot().candle;
     if (!candle) throw new Error("Start replay before placing an order");
-    const price = orderType === "limit"
-      ? (() => {
-          if (limitPrice === null) throw new Error("Enter a valid limit price");
-          const touched = side === "LONG" ? candle.low <= limitPrice : candle.high >= limitPrice;
-          if (!touched) throw new Error("Limit price has not been touched by the current candle");
-          return Math.min(limitPrice, candle.open) > 0 && side === "LONG" ? Math.min(limitPrice, candle.open)
-            : Math.max(limitPrice, candle.open);
-        })()
-      : candle.close;
+    // V1 market orders fill at the latest visible close. Pending limit-order
+    // matching on subsequent bars is intentionally a separate milestone.
+    if (orderType === "limit") throw new Error("Pending limit-order matching is not implemented yet. Choose Market for now.");
+    const price = candle.close;
     const quantity = Number(el<HTMLInputElement>("quantity").value);
     const leverage = Number(el<HTMLInputElement>("leverage").value);
     account.open({ symbol, side, quantity, price, leverage });
@@ -333,10 +328,6 @@ el<HTMLInputElement>("csv").addEventListener("change", async (event) => {
 });
 window.addEventListener("beforeunload", () => { stopTimer(); resizeObserver.disconnect(); chart.remove(); });
 
-function updateReplayStatus() {
-  const state = snapshot();
-  el<HTMLElement>("timestamp").textContent = state.timestamp === null ? "Replay has not started" : date(state.timestamp);
-}
 setData(demo, "Demo data loaded. Fetch historical Binance futures candles or import a CSV.");
 el<HTMLSelectElement>("timeframe").addEventListener("change", () => {
   el<HTMLElement>("notice").textContent = "Change timeframe, then fetch Binance candles to load that interval.";
