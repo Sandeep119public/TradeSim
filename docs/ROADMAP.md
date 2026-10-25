@@ -21,11 +21,12 @@
 ## Milestone 2: Binance historical datasets
 - [x] Fetch a bounded window of public USDⓈ-M Futures klines.
 - [x] Fetch historical funding-rate events for the loaded window.
-- [ ] Add date-range pagination, retries and rate-limit handling.
+- [x] Add date-range pagination and bounded retries for Binance trade candles, mark-price candles, and funding history.
 - [x] Fetch historical mark-price candles so mark-to-market and liquidation checks use a better price source.
 - [ ] Harden CSV schema detection and error reporting.
 - [ ] Persist datasets locally for offline replay.
-- [ ] Validate consistent interval and detect timestamp gaps.
+- [x] Detect and report timestamp gaps in loaded Binance historical candles without fabricating replacement bars.
+- [ ] Validate imported CSV interval consistency and detect timestamp gaps.
 
 ## Milestone 3: Futures realism
 - [ ] Load tick size, quantity step, minimum quantity/notional from exchange metadata.
