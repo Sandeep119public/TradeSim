@@ -90,7 +90,7 @@ export class PaperAccount {
     const exitFee = price * qty * this.feeRate;
 
     this.walletBalance += grossPnl - exitFee;
-    this.realizedPnl += grossPnl - exitFee;
+    this.realizedPnl += grossPnl - allocatedEntryFee - exitFee;
     this.feesPaid += exitFee;
     if (qty === old.quantity) {
       this.position = null;
