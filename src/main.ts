@@ -2,6 +2,7 @@ import "./style.css";
 import { createChart, CandlestickSeries, type IChartApi, type ISeriesApi, type Time } from "lightweight-charts";
 import { PaperAccount, type Side } from "./domain/paper-account";
 import { ReplayEngine } from "./domain/replay";
+import { resolveFillPrice } from "./domain/matching";
 import type { Candle } from "./domain/market";
 
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -221,24 +222,7 @@ function clearTradingSession() {
 function processPendingOrders(candle: Candle, index: number) {
   for (const order of orders) {
     if (order.status !== "PENDING" || index <= order.createdIndex) continue;
-    let fillPrice: number | null = null;
-
-    if (order.type === "market") {
-      // Market orders use the next eligible candle open, never the candle
-      // that was already visible when the user submitted the order.
-      fillPrice = candle.open;
-    } else if (order.limitPrice !== null) {
-      const touched = order.side === "LONG"
-        ? candle.low <= order.limitPrice
-        : candle.high >= order.limitPrice;
-      if (touched) {
-        // OHLC-only gap policy: give the order the opening price when it is
-        // better than its limit, otherwise fill at the limit. No queue model.
-        fillPrice = order.side === "LONG"
-          ? Math.min(order.limitPrice, candle.open)
-          : Math.max(order.limitPrice, candle.open);
-      }
-    }
+    const fillPrice = resolveFillPrice(order, candle, index);
     if (fillPrice === null) continue;
 
     try {
