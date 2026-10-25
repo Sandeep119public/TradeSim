@@ -8,6 +8,7 @@ describe("PaperAccount", () => {
     expect(state.usedMargin).toBe(500);
     expect(state.feesPaid).toBe(5);
     expect(state.walletBalance).toBe(995);
+    expect(state.realizedPnl).toBe(-5);
   });
 
   it("tracks long and short unrealized PnL", () => {
@@ -20,7 +21,7 @@ describe("PaperAccount", () => {
     expect(short.updateMark(90).unrealizedPnl).toBe(10);
   });
 
-  it("realizes PnL and exit fees on close", () => {
+  it("reports net realized PnL and wallet balance after closing", () => {
     const account = new PaperAccount({ startingBalance: 1_000, feeRate: 0.001 });
     account.open({ symbol: "BTCUSDT", side: "LONG", quantity: 1, price: 100, leverage: 10 });
     const state = account.close(110);
