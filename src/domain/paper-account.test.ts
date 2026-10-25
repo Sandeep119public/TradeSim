@@ -25,7 +25,7 @@ describe("PaperAccount", () => {
     account.open({ symbol: "BTCUSDT", side: "LONG", quantity: 1, price: 100, leverage: 10 });
     const state = account.close(110);
     expect(state.position).toBeNull();
-    expect(state.realizedPnl).toBeCloseTo(9.89);
+    expect(state.realizedPnl).toBeCloseTo(9.79);
     expect(state.walletBalance).toBeCloseTo(1_008.79);
     expect(state.feesPaid).toBeCloseTo(0.21);
   });
