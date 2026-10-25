@@ -209,6 +209,8 @@ function parseCsv(text: string): Candle[] {
     if (time > 0 && time < 100_000_000_000) time *= 1000;
     return { time, open: Number(row[1]), high: Number(row[2]), low: Number(row[3]), close: Number(row[4]), volume: Number(row[5]) };
   });
+  // Validate all CSV candles before publishing the dataset to replay.
+  replay.load(parsed);
   return parsed;
 }
 async function fetchBinance() {
