@@ -25,7 +25,7 @@ test("loads the latest 1,000 closed candles from public Binance Futures", async 
   await expect.poll(
     async () => (await notice.textContent()) ?? "",
     { timeout: 120_000, message: "Waiting for Binance to either load history or report a network error" },
-  ).toMatch(/^(Loaded \\d+ public Binance Futures|Unable to load Binance data:)/);
+  ).toMatch(/^(Loaded [\d,]+ public Binance Futures|Unable to load Binance data:)/);
 
   const initialNotice = (await notice.textContent()) ?? "";
   if (initialNotice.startsWith("Unable to load Binance data:")) {
