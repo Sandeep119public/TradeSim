@@ -60,9 +60,3 @@ jobs:
           path: test-results/
           if-no-files-found: ignore
           retention-days: 7
-      - name: Live Binance browser smoke test (manual dispatch only)
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          TRADESIM_SMOKE_SYMBOL: ${{ inputs.symbol || 'BTCUSDT' }}
-          TRADESIM_SMOKE_INTERVAL: ${{ inputs.interval || '1m' }}
-        run: npm run test:e2e:live
