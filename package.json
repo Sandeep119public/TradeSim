@@ -1,0 +1,22 @@
+{
+  "name": "tradesim",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "lightweight-charts": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "~5.7.2",
+    "vite": "^6.4.3",
+    "vitest": "^3.0.0"
+  }
+}
