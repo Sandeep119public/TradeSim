@@ -31,6 +31,28 @@ describe("PaperAccount", () => {
     expect(state.feesPaid).toBeCloseTo(0.21);
   });
 
+  it("stores attached stop-loss and take-profit levels on the position", () => {
+    const account = new PaperAccount({ feeRate: 0 });
+    const state = account.open({
+      symbol: "BTCUSDT", side: "LONG", quantity: 1, price: 100, leverage: 10,
+      stopLossPrice: 95, takeProfitPrice: 110,
+    });
+    expect(state.position?.stopLossPrice).toBe(95);
+    expect(state.position?.takeProfitPrice).toBe(110);
+  });
+
+  it("rejects stop-loss and take-profit levels on the wrong side of entry", () => {
+    const account = new PaperAccount({ feeRate: 0 });
+    expect(() => account.open({
+      symbol: "BTCUSDT", side: "LONG", quantity: 1, price: 100, leverage: 10,
+      stopLossPrice: 101,
+    })).toThrow(/Stop-loss must be below entry/);
+    expect(() => account.open({
+      symbol: "BTCUSDT", side: "SHORT", quantity: 1, price: 100, leverage: 10,
+      takeProfitPrice: 101,
+    })).toThrow(/Take-profit must be above entry/);
+  });
+
   it("rejects entries beyond available margin", () => {
     const account = new PaperAccount({ startingBalance: 100, feeRate: 0 });
     expect(() => account.open({ symbol: "BTCUSDT", side: "LONG", quantity: 10, price: 100, leverage: 1 })).toThrow(/Insufficient/);
