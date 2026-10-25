@@ -28,7 +28,16 @@ test("loads the latest 1,000 closed candles from public Binance Futures", async 
 
   await expect(notice).toContainText(/Range: .+ to .+\./);
   await expect(notice).toContainText(/\d+ historical funding event\(s\) loaded\./);
-  await expect(notice).toContainText(/\d+\/1,000 candle-aligned mark-price candles loaded\./);
+  await expect(notice).toContainText("1,000/1,000 candle-aligned mark-price candles loaded.");
+  await expect(notice).not.toContainText("Warnings:");
+  await expect(notice).not.toContainText("Historical mark-price candles unavailable");
+  await expect(notice).not.toContainText("Historical funding history unavailable");
+  await expect(notice).not.toContainText("candle timestamp spacing issue(s)");
+  const fundingCount = Number(
+    (await notice.textContent())?.match(/(\d+) historical funding event\(s\) loaded\./)?.[1] ?? "0",
+  );
+  expect(fundingCount).toBeGreaterThan(0);
+
   await expect(page.locator("#symbol")).toHaveValue(symbol);
   await expect(page.locator("#timeframe")).toHaveValue(interval);
   await expect(page.locator("#symbol")).toBeEnabled();
