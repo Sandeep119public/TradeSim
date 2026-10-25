@@ -225,16 +225,44 @@ describe("loadBinanceHistoricalData", () => {
     expect(result.warnings[0]).toContain("timestamp spacing issue");
   });
 
-  it("rejects a range above the replay candle safety limit before fetching", async () => {
+  it("rejects a range with exactly one candle beyond the replay safety limit before fetching", async () => {
     const fetchImpl = vi.fn(async () => jsonResponse([]));
     await expect(loadBinanceHistoricalData({
       symbol: "BTCUSDT",
       interval: "1m",
       startTime: 0,
-      endTime: 100_001 * 60_000,
+      endTime: 100_000 * 60_000,
       fetchImpl,
       sleep: async () => undefined,
     })).rejects.toThrow("safety limit");
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("accepts a full-size range when the entered timestamps are off candle boundaries", async () => {
+    const interval = 60_000;
+    const startTime = interval - 1;
+    const endTime = 100_000 * interval - 1;
+    const resultRows = [
+      [interval, "100", "105", "95", "102", "10"],
+      [2 * interval, "102", "108", "101", "107", "12"],
+    ];
+    const fetchImpl: HistoricalFetch = async (input) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/klines")) return jsonResponse(resultRows);
+      return jsonResponse([]);
+    };
+
+    const result = await loadBinanceHistoricalData({
+      symbol: "BTCUSDT",
+      interval: "1m",
+      startTime,
+      endTime,
+      nowMs: endTime + interval,
+      maxCandles: 100_000,
+      maxRetries: 0,
+      fetchImpl,
+      sleep: async () => undefined,
+    });
+    expect(result.candles.map((item) => item.time)).toEqual([interval, 2 * interval]);
   });
 });
