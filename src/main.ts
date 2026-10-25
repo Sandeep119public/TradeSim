@@ -17,6 +17,29 @@ let orderType: "market" | "limit" = "market";
 let limitPrice: number | null = null;
 let candles: Candle[] = [];
 
+type OrderStatus = "PENDING" | "FILLED" | "REJECTED" | "CANCELLED";
+interface PaperOrder {
+  id: number;
+  symbol: string;
+  side: Side;
+  type: "market" | "limit";
+  quantity: number;
+  leverage: number;
+  limitPrice: number | null;
+  createdIndex: number;
+  status: OrderStatus;
+  filledPrice: number | null;
+  message?: string;
+}
+interface ActivityItem {
+  timestamp: number | null;
+  message: string;
+  tone: "" | "positive" | "negative";
+}
+let orders: PaperOrder[] = [];
+let activity: ActivityItem[] = [];
+let nextOrderId = 1;
+
 const demoStart = Date.UTC(2026, 0, 15, 10, 0);
 const demo: Candle[] = Array.from({ length: 120 }, (_, i) => {
   const open = 93_000 + Math.sin(i / 7) * 520 + i * 4;
@@ -66,6 +89,7 @@ app.innerHTML = `
         <div id="limit-wrap" hidden><label>Limit price<input id="limit-price" type="number" min="0" step="any"/></label></div>
         <button id="submit" class="submit-long" type="button">Open Long</button>
         <div class="position-box"><div class="section-title"><h3>Open position</h3><button id="close" class="ghost" disabled type="button">Close</button></div><div id="position-summary" class="empty">No open position</div></div>
+        <div class="position-box"><div class="section-title"><h3>Order &amp; fill history</h3><button id="cancel-orders" class="ghost" type="button">Cancel pending</button></div><div id="activity-list" class="activity-list empty">No order activity yet</div></div>
       </section>
     </aside>
   </main>
@@ -116,7 +140,7 @@ function drawChart() {
   el<HTMLElement>("end-time").textContent = candles.length ? date(candles[candles.length - 1].time) : "";
   const slider = el<HTMLInputElement>("seek");
   slider.max = String(Math.max(0, candles.length - 1));
-  slider.value = String(Math.max(0, state.index));
+  slider.value = String(state.index);
   const current = state.candle;
   el<HTMLElement>("ohlc").textContent = current
     ? `O ${current.open.toFixed(2)}  H ${current.high.toFixed(2)}  L ${current.low.toFixed(2)}  C ${current.close.toFixed(2)}`
@@ -137,6 +161,7 @@ function drawChart() {
   }
   updatePreview();
   drawPosition();
+  drawActivity();
 }
 function updatePreview() {
   const price = snapshot().candle?.close ?? snapshot().candle?.open ?? (candles[0]?.open ?? 0);
@@ -159,31 +184,101 @@ function drawPosition() {
   summary.className = "";
   summary.innerHTML = `<div><b>${position.symbol} · ${position.side}</b></div><div>Size: ${position.quantity} · Leverage: ${position.leverage}×</div><div>Entry: ${money(position.entryPrice)} · Mark: ${money(mark)}</div><div class="${pnl >= 0 ? "positive" : "negative"}">Unrealized P&amp;L: ${money(pnl)}</div>`;
 }
-function replayStep() {
+function drawActivity() {
+  const list = el<HTMLDivElement>("activity-list");
+  list.replaceChildren();
+  list.className = activity.length ? "activity-list" : "activity-list empty";
+  if (activity.length === 0) {
+    list.textContent = "No order activity yet";
+    return;
+  }
+  for (const item of activity) {
+    const row = document.createElement("div");
+    row.className = "activity-row";
+    const timestamp = document.createElement("span");
+    timestamp.className = "activity-time";
+    timestamp.textContent = date(item.timestamp);
+    const message = document.createElement("span");
+    message.className = item.tone;
+    message.textContent = item.message;
+    row.append(timestamp, message);
+    list.append(row);
+  }
+}
+function recordActivity(message: string, tone: ActivityItem["tone"] = "") {
+  activity.unshift({ timestamp: snapshot().timestamp, message, tone });
+  activity = activity.slice(0, 25);
+  drawActivity();
+}
+function clearTradingSession() {
+  account = new PaperAccount();
+  orders = [];
+  activity = [];
+  nextOrderId = 1;
+}
+function processPendingOrders(candle: Candle, index: number) {
+  for (const order of orders) {
+    if (order.status !== "PENDING" || index <= order.createdIndex) continue;
+    let fillPrice: number | null = null;
+
+    if (order.type === "market") {
+      // Market orders use the next eligible candle open, never the candle
+      // that was already visible when the user submitted the order.
+      fillPrice = candle.open;
+    } else if (order.limitPrice !== null) {
+      const touched = order.side === "LONG"
+        ? candle.low <= order.limitPrice
+        : candle.high >= order.limitPrice;
+      if (touched) {
+        // OHLC-only gap policy: give the order the opening price when it is
+        // better than its limit, otherwise fill at the limit. No queue model.
+        fillPrice = order.side === "LONG"
+          ? Math.min(order.limitPrice, candle.open)
+          : Math.max(order.limitPrice, candle.open);
+      }
+    }
+    if (fillPrice === null) continue;
+
+    try {
+      account.open({
+        symbol: order.symbol,
+        side: order.side,
+        quantity: order.quantity,
+        price: fillPrice,
+        leverage: order.leverage,
+      });
+      order.status = "FILLED";
+      order.filledPrice = fillPrice;
+      recordActivity(`FILLED #${order.id} ${order.side} ${order.quantity} @ ${money(fillPrice)}`, "positive");
+    } catch (error) {
+      order.status = "REJECTED";
+      order.message = error instanceof Error ? error.message : String(error);
+      recordActivity(`REJECTED #${order.id}: ${order.message}`, "negative");
+    }
+  }
+}
+function advanceOneBar() {
   const previous = snapshot().index;
-  if (snapshot().status !== "playing") replay.play();
   const state = replay.step();
-  if (state.index >= 0 && state.index !== previous) {
-    const candle = state.candle!;
-    account.updateMark(candle.close);
+  if (state.index >= 0 && state.index !== previous && state.candle) {
+    processPendingOrders(state.candle, state.index);
+    account.updateMark(state.candle.close);
   }
   drawChart();
+  return state;
+}
+function replayStep() {
+  const state = advanceOneBar();
   if (state.status === "playing" && state.index < candles.length - 1) {
     timer = setTimeout(replayStep, Math.max(5, 1000 / speed));
   } else stopTimer();
 }
-function resetReplay() {
-  stopTimer();
-  replay.load(candles);
-  account = new PaperAccount();
-  drawChart();
-}
 function seekReplay(index: number) {
   stopTimer();
   replay.seek(index);
-  // Until event-journal reconstruction is implemented, seeking resets the
-  // account and explicitly prevents prior trades from leaking across time.
-  account = new PaperAccount();
+  // Event-journal reconstruction comes later. V1 clears trading history on
+  // seek so future orders and positions can never leak into earlier bars.
+  clearTradingSession();
   if (index >= 0) account.updateMark(candles[index].close);
   drawChart();
 }
@@ -191,7 +286,7 @@ function setData(next: Candle[], message: string) {
   stopTimer();
   replay.load(next);
   candles = next;
-  account = new PaperAccount();
+  clearTradingSession();
   chart.timeScale().fitContent();
   el<HTMLElement>("notice").textContent = message;
   drawChart();
@@ -247,12 +342,20 @@ async function fetchBinance() {
 
 el<HTMLButtonElement>("play").addEventListener("click", () => {
   if (snapshot().status === "playing") {
-    stopTimer(); replay.pause(); drawChart(); return;
+    stopTimer();
+    replay.pause();
+    drawChart();
+    return;
   }
+  if (snapshot().status === "ended") seekReplay(-1);
   replay.play();
   replayStep();
 });
-el<HTMLButtonElement>("step").addEventListener("click", () => { stopTimer(); replay.pause(); replay.step(); const candle = snapshot().candle; if (candle) account.updateMark(candle.close); drawChart(); });
+el<HTMLButtonElement>("step").addEventListener("click", () => {
+  stopTimer();
+  replay.pause();
+  advanceOneBar();
+});
 el<HTMLButtonElement>("step-back").addEventListener("click", () => seekReplay(Math.max(-1, snapshot().index - 1)));
 el<HTMLInputElement>("seek").addEventListener("input", (event) => seekReplay(Number((event.target as HTMLInputElement).value)));
 el<HTMLSelectElement>("speed").addEventListener("change", (event) => {
@@ -260,9 +363,16 @@ el<HTMLSelectElement>("speed").addEventListener("change", (event) => {
   replay.setSpeed(speed);
 });
 el<HTMLSelectElement>("symbol").addEventListener("change", (event) => {
-  const pair = (event.target as HTMLSelectElement).value;
+  const select = event.target as HTMLSelectElement;
+  const pair = select.value;
+  if (account.snapshot().position || orders.some((order) => order.status === "PENDING")) {
+    select.value = symbol;
+    el<HTMLElement>("notice").textContent = "Close the position and cancel pending orders before switching symbols.";
+    return;
+  }
   symbol = pair;
-  el<HTMLElement>("symbol-title").innerHTML = `${symbol} <span>PERPETUAL</span>`;
+  el<HTMLElement>("symbol-title").textContent = `${symbol} PERPETUAL`;
+  el<HTMLElement>("notice").textContent = "Symbol selected. Fetch Binance candles to load its historical data.";
 });
 el<HTMLSelectElement>("order-type").addEventListener("change", (event) => {
   orderType = (event.target as HTMLSelectElement).value as "market" | "limit";
@@ -286,16 +396,37 @@ function updateSideUi() {
 }
 el<HTMLButtonElement>("submit").addEventListener("click", () => {
   try {
-    const candle = snapshot().candle;
-    if (!candle) throw new Error("Start replay before placing an order");
-    // V1 market orders fill at the latest visible close. Pending limit-order
-    // matching on subsequent bars is intentionally a separate milestone.
-    if (orderType === "limit") throw new Error("Pending limit-order matching is not implemented yet. Choose Market for now.");
-    const price = candle.close;
+    const state = snapshot();
+    if (!state.candle) throw new Error("Start replay before placing an order");
+    if (state.index >= candles.length - 1) throw new Error("Replay is at the last candle. Seek to an earlier candle to trade.");
+    if (account.snapshot().position) throw new Error("Close the open position before placing another order");
+    if (orders.some((order) => order.status === "PENDING")) throw new Error("Cancel or wait for the pending order first");
+
     const quantity = Number(el<HTMLInputElement>("quantity").value);
     const leverage = Number(el<HTMLInputElement>("leverage").value);
-    account.open({ symbol, side, quantity, price, leverage });
-    el<HTMLElement>("notice").textContent = `Paper ${side.toLowerCase()} opened at ${money(price)}. No live order was sent.`;
+    if (!Number.isFinite(quantity) || quantity <= 0) throw new Error("Enter a valid quantity");
+    if (!Number.isInteger(leverage) || leverage < 1 || leverage > 50) throw new Error("Leverage must be between 1x and 50x");
+    if (orderType === "limit" && (limitPrice === null || !Number.isFinite(limitPrice) || limitPrice <= 0)) {
+      throw new Error("Enter a valid limit price");
+    }
+
+    const order: PaperOrder = {
+      id: nextOrderId++,
+      symbol,
+      side,
+      type: orderType,
+      quantity,
+      leverage,
+      limitPrice: orderType === "limit" ? limitPrice : null,
+      createdIndex: state.index,
+      status: "PENDING",
+      filledPrice: null,
+    };
+    orders.push(order);
+    recordActivity(`SUBMITTED #${order.id} ${order.side} ${order.type.toUpperCase()} ${quantity}`);
+    el<HTMLElement>("notice").textContent = order.type === "market"
+      ? "Paper market order queued. It will fill at the next eligible candle open."
+      : "Paper limit order queued. It can fill only on a future candle that reaches the limit; OHLC fills are approximate.";
     drawChart();
   } catch (error) {
     el<HTMLElement>("notice").textContent = error instanceof Error ? error.message : String(error);
@@ -305,7 +436,10 @@ el<HTMLButtonElement>("close").addEventListener("click", () => {
   try {
     const price = snapshot().candle?.close;
     if (!price) throw new Error("No replay price available");
+    const before = account.snapshot().walletBalance;
     account.close(price);
+    const walletDelta = account.snapshot().walletBalance - before;
+    recordActivity(`CLOSED position @ ${money(price)} · wallet change ${money(walletDelta)}`, walletDelta >= 0 ? "positive" : "negative");
     el<HTMLElement>("notice").textContent = `Paper position closed at ${money(price)}.`;
     drawChart();
   } catch (error) {
@@ -313,9 +447,19 @@ el<HTMLButtonElement>("close").addEventListener("click", () => {
   }
 });
 el<HTMLButtonElement>("reset").addEventListener("click", () => {
-  account = new PaperAccount();
+  clearTradingSession();
   drawChart();
-  el<HTMLElement>("notice").textContent = "Paper account reset. Replay position was not changed.";
+  el<HTMLElement>("notice").textContent = "Paper account and order history reset. Replay position was not changed.";
+});
+el<HTMLButtonElement>("cancel-orders").addEventListener("click", () => {
+  const pending = orders.filter((order) => order.status === "PENDING");
+  for (const order of pending) {
+    order.status = "CANCELLED";
+    recordActivity(`CANCELLED #${order.id}`);
+  }
+  if (pending.length === 0) el<HTMLElement>("notice").textContent = "No pending orders to cancel.";
+  else el<HTMLElement>("notice").textContent = `Cancelled ${pending.length} pending order(s).`;
+  drawChart();
 });
 el<HTMLButtonElement>("load-binance").addEventListener("click", () => void fetchBinance());
 el<HTMLButtonElement>("import-csv").addEventListener("click", () => el<HTMLInputElement>("csv").click());
