@@ -53,6 +53,34 @@ describe("PaperAccount", () => {
     })).toThrow(/Take-profit must be above entry/);
   });
 
+  it("charges long positions and credits short positions at positive funding", () => {
+    const long = new PaperAccount({ startingBalance: 1_000, feeRate: 0 });
+    long.open({ symbol: "BTCUSDT", side: "LONG", quantity: 2, price: 100, leverage: 10 });
+    expect(long.applyFunding(0.01, 110)).toBeCloseTo(-2.2);
+    expect(long.snapshot().walletBalance).toBeCloseTo(997.8);
+    expect(long.snapshot().fundingPaid).toBeCloseTo(2.2);
+    expect(long.snapshot().netFunding).toBeCloseTo(-2.2);
+    expect(long.snapshot().realizedPnl).toBeCloseTo(-2.2);
+
+    const short = new PaperAccount({ startingBalance: 1_000, feeRate: 0 });
+    short.open({ symbol: "BTCUSDT", side: "SHORT", quantity: 2, price: 100, leverage: 10 });
+    expect(short.applyFunding(0.01, 110)).toBeCloseTo(2.2);
+    expect(short.snapshot().walletBalance).toBeCloseTo(1_002.2);
+    expect(short.snapshot().fundingReceived).toBeCloseTo(2.2);
+  });
+
+  it("reverses funding direction when the funding rate is negative", () => {
+    const account = new PaperAccount({ feeRate: 0 });
+    account.open({ symbol: "BTCUSDT", side: "LONG", quantity: 1, price: 100, leverage: 10 });
+    expect(account.applyFunding(-0.01, 100)).toBeCloseTo(1);
+    expect(account.snapshot().netFunding).toBeCloseTo(1);
+  });
+
+  it("does not apply funding without an open position", () => {
+    const account = new PaperAccount();
+    expect(() => account.applyFunding(0.001, 100)).toThrow(/open position/);
+  });
+
   it("rejects entries beyond available margin", () => {
     const account = new PaperAccount({ startingBalance: 100, feeRate: 0 });
     expect(() => account.open({ symbol: "BTCUSDT", side: "LONG", quantity: 10, price: 100, leverage: 1 })).toThrow(/Insufficient/);
