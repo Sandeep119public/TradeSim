@@ -45,7 +45,7 @@ export class PaperAccount {
     this.startingBalance = positive(startingBalance, "Starting balance");
     if (!Number.isFinite(feeRate) || feeRate < 0 || feeRate >= 1) throw new RangeError("Fee rate must be in [0, 1)");
     this.feeRate = feeRate;
-    this.walletBalance = startingBalance;
+    this.walletBalance = this.startingBalance;
   }
 
   updateMark(price: number): AccountSnapshot {
