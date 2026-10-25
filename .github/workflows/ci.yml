@@ -28,3 +28,7 @@ jobs:
         run: npm test
       - name: Build production bundle
         run: npm run build
+      - name: Install Playwright Chromium and system dependencies
+        run: npx playwright install --with-deps chromium
+      - name: Run browser integration tests
+        run: npm run test:e2e
