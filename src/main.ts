@@ -430,6 +430,9 @@ function seekReplay(index: number) {
     }
   }
   replay.seek(index);
+  el<HTMLElement>("notice").textContent = index < 0
+    ? "Replay returned to the start. Recorded actions will replay as you move forward."
+    : "Paper state reconstructed through " + date(snapshot().timestamp) + ". A new action here will branch the timeline and replace later actions.";
   drawChart();
 }
 function setData(
