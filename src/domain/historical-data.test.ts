@@ -221,7 +221,7 @@ describe("loadBinanceHistoricalData", () => {
     });
 
     expect(result.candles.map((candle) => candle.time)).toEqual([base, base + 120_000, base + 180_000]);
-    expect(result.gapReport).toEqual({ gapTransitions: 2, estimatedMissingCandles: 1 });
+    expect(result.gapReport).toEqual({ gapTransitions: 1, estimatedMissingCandles: 1 });
     expect(result.warnings[0]).toContain("timestamp spacing issue");
   });
 
