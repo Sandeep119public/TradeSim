@@ -22,6 +22,18 @@ test("loads the latest 1,000 closed candles from public Binance Futures", async 
   await page.locator("#load-binance").click();
 
   const notice = page.locator("#notice");
+  await expect.poll(
+    async () => (await notice.textContent()) ?? "",
+    { timeout: 120_000, message: "Waiting for Binance to either load history or report a network error" },
+  ).toMatch(/^(Loaded \\d+ public Binance Futures|Unable to load Binance data:)/);
+
+  const initialNotice = (await notice.textContent()) ?? "";
+  if (initialNotice.startsWith("Unable to load Binance data:")) {
+    throw new Error(
+      "Live Binance request failed before data loaded: " + initialNotice +
+      " Check the runner's network, regional API availability, and browser CORS access.",
+    );
+  }
   await expect(notice).toContainText(
     "Loaded 1,000 public Binance Futures " + symbol + " candles.",
   );
