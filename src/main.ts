@@ -12,6 +12,8 @@ let account = new PaperAccount();
 let timer: ReturnType<typeof setTimeout> | null = null;
 let speed = 1;
 let symbol = "BTCUSDT";
+let marketDataSymbol = "BTCUSDT";
+let marketDataInterval = "1m";
 let side: Side = "LONG";
 let orderType: "market" | "limit" = "market";
 let limitPrice: number | null = null;
@@ -286,6 +288,8 @@ function setData(next: Candle[], message: string) {
   stopTimer();
   replay.load(next);
   candles = next;
+  marketDataSymbol = el<HTMLSelectElement>("symbol").value;
+  marketDataInterval = el<HTMLSelectElement>("timeframe").value;
   clearTradingSession();
   chart.timeScale().fitContent();
   el<HTMLElement>("notice").textContent = message;
@@ -330,7 +334,6 @@ async function fetchBinance() {
     if (next[next.length - 1].time + (interval === "1m" ? 60_000 : interval === "5m" ? 300_000 : interval === "15m" ? 900_000 : 3_600_000) > Date.now()) next.pop();
     if (next.length === 0) throw new Error("No fully closed candles are available");
     symbol = pair;
-    el<HTMLElement>("symbol-title").innerHTML = `${symbol} <span>PERPETUAL</span>`;
     setData(next, `Loaded ${next.length} public Binance Futures ${symbol} candles. Replay is paused at the beginning.`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -398,6 +401,9 @@ el<HTMLButtonElement>("submit").addEventListener("click", () => {
   try {
     const state = snapshot();
     if (!state.candle) throw new Error("Start replay before placing an order");
+    if (symbol !== marketDataSymbol || el<HTMLSelectElement>("timeframe").value !== marketDataInterval) {
+      throw new Error("Fetch or import candles for the selected symbol and timeframe before trading.");
+    }
     if (state.index >= candles.length - 1) throw new Error("Replay is at the last candle. Seek to an earlier candle to trade.");
     if (account.snapshot().position) throw new Error("Close the open position before placing another order");
     if (orders.some((order) => order.status === "PENDING")) throw new Error("Cancel or wait for the pending order first");
