@@ -36,7 +36,7 @@ export class PaperAccount {
   private readonly startingBalance: number;
   private readonly feeRate: number;
   private walletBalance: number;
-  private realizedPnl = 0;
+  private grossRealizedPnl = 0;
   private feesPaid = 0;
   private position: Position | null = null;
   private markPrice: number | null = null;
@@ -60,7 +60,7 @@ export class PaperAccount {
     quantity = positive(quantity, "Quantity");
     price = positive(price, "Entry price");
     leverage = positive(leverage, "Leverage");
-    if (leverage > 125) throw new RangeError("Leverage cannot exceed the v1 maximum of 125x");
+    if (!Number.isInteger(leverage) || leverage > 125) throw new RangeError("Leverage must be an integer from 1x to 125x");
     if (!symbol.trim()) throw new Error("Symbol is required");
 
     const notional = quantity * price;
@@ -70,7 +70,6 @@ export class PaperAccount {
     if (requiredMargin + fee > currentAvailable) throw new Error("Insufficient available margin");
 
     this.walletBalance -= fee;
-    this.realizedPnl -= fee;
     this.feesPaid += fee;
     this.position = { symbol: symbol.toUpperCase(), side, quantity, entryPrice: price, entryFee: fee, leverage };
     this.markPrice = price;
@@ -90,7 +89,7 @@ export class PaperAccount {
     const exitFee = price * qty * this.feeRate;
 
     this.walletBalance += grossPnl - exitFee;
-    this.realizedPnl += grossPnl - exitFee;
+    this.grossRealizedPnl += grossPnl;
     this.feesPaid += exitFee;
     if (qty === old.quantity) {
       this.position = null;
@@ -116,7 +115,7 @@ export class PaperAccount {
     return {
       walletBalance: this.walletBalance,
       equity,
-      realizedPnl: this.realizedPnl,
+      realizedPnl: this.grossRealizedPnl - this.feesPaid,
       unrealizedPnl,
       feesPaid: this.feesPaid,
       usedMargin,
