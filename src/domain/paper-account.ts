@@ -17,6 +17,9 @@ export interface AccountSnapshot {
   realizedPnl: number;
   unrealizedPnl: number;
   feesPaid: number;
+  fundingPaid: number;
+  fundingReceived: number;
+  netFunding: number;
   usedMargin: number;
   availableMargin: number;
   position: Position | null;
@@ -40,6 +43,9 @@ export class PaperAccount {
   private walletBalance: number;
   private grossRealizedPnl = 0;
   private feesPaid = 0;
+  private fundingPaid = 0;
+  private fundingReceived = 0;
+  private netFunding = 0;
   private position: Position | null = null;
   private markPrice: number | null = null;
 
@@ -94,6 +100,24 @@ export class PaperAccount {
     return this.snapshot();
   }
 
+  /** Apply one historical funding settlement to the currently open position. */
+  applyFunding(rate: number, markPrice: number): number {
+    if (!this.position) throw new Error("Funding requires an open position");
+    if (!Number.isFinite(rate)) throw new RangeError("Funding rate must be finite");
+    markPrice = positive(markPrice, "Funding mark price");
+
+    // Positive rates mean longs pay shorts; negative rates reverse the flow.
+    const direction = this.position.side === "LONG" ? -1 : 1;
+    const payment = direction * markPrice * this.position.quantity * rate;
+    if (!Number.isFinite(payment)) throw new RangeError("Funding payment must be finite");
+    this.walletBalance += payment;
+    this.netFunding += payment;
+    if (payment < 0) this.fundingPaid += -payment;
+    else this.fundingReceived += payment;
+    this.markPrice = markPrice;
+    return payment;
+  }
+
   close(price: number, quantity?: number): AccountSnapshot {
     if (!this.position) throw new Error("No open position");
     price = positive(price, "Exit price");
@@ -133,9 +157,12 @@ export class PaperAccount {
     return {
       walletBalance: this.walletBalance,
       equity,
-      realizedPnl: this.grossRealizedPnl - this.feesPaid,
+      realizedPnl: this.grossRealizedPnl - this.feesPaid + this.netFunding,
       unrealizedPnl,
       feesPaid: this.feesPaid,
+      fundingPaid: this.fundingPaid,
+      fundingReceived: this.fundingReceived,
+      netFunding: this.netFunding,
       usedMargin,
       availableMargin: equity - usedMargin,
       position: p ? { ...p } : null,
