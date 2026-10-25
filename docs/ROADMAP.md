@@ -12,12 +12,17 @@
 - [x] Add attached stop-loss and take-profit levels to paper orders.
 - [x] Resolve future-candle risk exits with gap-aware fills and conservative SL-first ambiguity handling.
 - [x] Add tests for SL/TP levels, gap behavior, and same-candle ambiguity.
-- [ ] Preserve and reconstruct account/order history deterministically on seek.
+- [x] Load historical Binance funding rates and apply settlements through replay time.
+- [x] Add funding cash-flow accounting and realized P&L integration.
+- [x] Add fixed-rate maintenance-margin and simplified liquidation estimate/trigger with tests.
+- [ ] Preserve and reconstruct account/order/funding history deterministically on seek.
 - [ ] Add cancel/replace behavior and more complete closed-trade reporting.
 
 ## Milestone 2: Binance historical datasets
 - [x] Fetch a bounded window of public USDⓈ-M Futures klines.
+- [x] Fetch historical funding-rate events for the loaded window.
 - [ ] Add date-range pagination, retries and rate-limit handling.
+- [ ] Fetch historical mark-price candles so liquidation and funding use the correct price source.
 - [ ] Harden CSV schema detection and error reporting.
 - [ ] Persist datasets locally for offline replay.
 - [ ] Validate consistent interval and detect timestamp gaps.
@@ -26,9 +31,9 @@
 - [ ] Load tick size, quantity step, minimum quantity/notional from exchange metadata.
 - [ ] Add configurable maker/taker fee assumptions.
 - [ ] Add standalone stop-market orders and editable risk levels on an open position.
-- [ ] Integrate historical mark prices and funding events.
-- [ ] Add maintenance-margin tiers and liquidation simulation.
+- [ ] Replace the fixed maintenance-margin rate with symbol-specific notional brackets.
 - [ ] Improve fills with trade-level replay; OHLC matching is only an approximation.
+- [ ] Add partial fills and more realistic spread/market impact assumptions.
 
 ## Milestone 4: Research workflow
 - [ ] Event journal and reproducible replay seek.
