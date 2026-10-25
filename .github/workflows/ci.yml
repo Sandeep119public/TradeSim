@@ -32,3 +32,6 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Run browser integration tests
         run: npm run test:e2e
+      - name: Live Binance browser smoke test (manual dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        run: npm run test:e2e:live
