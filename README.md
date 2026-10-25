@@ -13,6 +13,9 @@ TradeSim is a local-first simulator for replaying historical Binance USDⓈ-M fu
 - Market orders fill at the next eligible candle open
 - Limit orders can fill only on future candles using an explicit OHLC touch/gap model
 - Attached stop-loss and take-profit exits, with stop-first handling if both levels are touched in one candle
+- Attached SL/TP triggers use trade-price candle OHLC; liquidation uses mark-price OHLC when aligned data exists, otherwise trade-price OHLC
+- If liquidation and another exit are touched in one candle, liquidation wins because OHLC cannot establish their intrabar order; SL still wins when both SL and TP are touched
+- The entire fill candle is checked for risk exits after the fill. For intrabar limit fills, this conservatively applies the candle's full OHLC range because the price path is unknown.
 - Funding payments credited/debited at historical settlement timestamps while a position is open
 - Uses historical mark-price candles for mark-to-market and liquidation OHLC checks when available
 - Simplified maintenance-margin and liquidation estimate for a one-position cross-equity account
@@ -36,7 +39,7 @@ npm run build
 - Seeking rebuilds account/order/funding state from the ordered action journal. Placing an action after seeking branches the session and drops actions from later replay indices.
 - The Binance market-data download has no arbitrary date-range pagination or retry/resume yet; it is still bounded to 1,000 candles.
 - The liquidation model uses historical mark-price OHLC when aligned mark candles are available, but still uses a simplified fixed 0.5% maintenance-margin rate. It is not Binance's exact mark-price/bracket-accurate liquidation model.
-- Funding uses the historical funding-rate endpoint and prefers its event mark price. If absent, the nearest non-future mark-candle value is used, then trade-candle close as a clearly reported fallback.
+- Funding uses the historical funding-rate endpoint and prefers its event mark price. If absent, an exact-time or still-available mark-candle open, then the latest completed prior mark close is used. If neither exists, the settlement is skipped and recorded; no trade-candle close fallback is used.
 - The simulator supports one open position at a time and does not yet model partial fills, queue position, tick/step size constraints, standalone stop-market entry orders, or editable SL/TP after entry.
 - Historical OHLC data cannot reconstruct actual intrabar trade order or order-book fills.
 

@@ -17,7 +17,8 @@ export interface RiskExit {
  * Resolves attached SL/TP against OHLC candles.
  *
  * Conservative assumptions:
- * - never inspect the candle on which the position was opened;
+ * - evaluate the opening candle after the fill; for an intrabar limit fill,
+ *   conservatively apply its full OHLC range because the path is unknown;
  * - when SL and TP are both touched in one OHLC candle, stop loss wins;
  * - stop gaps fill at the open when that is worse than the stop trigger;
  * - take-profit gaps fill at the open when it is better than the target;
@@ -36,7 +37,7 @@ export function resolveRiskExit(
   if (!Number.isInteger(openedIndex) || openedIndex < -1) {
     throw new RangeError("openedIndex must be an integer greater than or equal to -1");
   }
-  if (candleIndex <= openedIndex) return null;
+  if (candleIndex < openedIndex) return null;
 
   const stop = position.stopLossPrice;
   const target = position.takeProfitPrice;

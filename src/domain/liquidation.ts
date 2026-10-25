@@ -10,7 +10,10 @@ export interface LiquidationExit {
  *
  * The caller should pass mark-price OHLC when available; trade-candle OHLC is
  * only a fallback proxy. Gaps through the threshold fill at the candle open
- * if that is worse. Fixed maintenance-margin tiers remain approximate.
+ * if that is worse. The opening candle is eligible after the fill; with an
+ * intrabar limit fill, the full candle range is conservatively considered
+ * because OHLC data cannot establish the sequence. Fixed maintenance-margin
+ * tiers remain approximate.
  */
 export function resolveLiquidationExit(
   side: "LONG" | "SHORT",
@@ -29,7 +32,7 @@ export function resolveLiquidationExit(
   if (!Number.isFinite(liquidationPrice) || liquidationPrice <= 0) {
     throw new RangeError("Liquidation price must be finite and positive");
   }
-  if (candleIndex <= openedIndex) return null;
+  if (candleIndex < openedIndex) return null;
 
   if (side === "LONG") {
     if (candle.low > liquidationPrice) return null;
