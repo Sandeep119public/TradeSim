@@ -231,10 +231,13 @@ function setData(
   message: string,
   funding: HistoricalFunding[] = [],
   marks: MarkPriceCandle[] = [],
+  loadedSelection?: { symbol: string; interval: SupportedInterval },
 ) {
   stopTimer();
-  const nextMarketSymbol = el<HTMLSelectElement>("symbol").value;
-  const nextMarketInterval = el<HTMLSelectElement>("timeframe").value;
+  const nextMarketSymbol = loadedSelection?.symbol ?? el<HTMLSelectElement>("symbol").value;
+  const nextMarketInterval = loadedSelection?.interval ?? el<HTMLSelectElement>("timeframe").value;
+  el<HTMLSelectElement>("symbol").value = nextMarketSymbol;
+  el<HTMLSelectElement>("timeframe").value = nextMarketInterval;
   const candleIntervalMs = nextMarketInterval === "1m" ? 60_000 : nextMarketInterval === "5m" ? 300_000 : nextMarketInterval === "15m" ? 900_000 : 3_600_000;
   const nextSession = new ReplaySession(next, funding, marks, { candleIntervalMs });
   candles = next;
@@ -263,7 +266,16 @@ function parseCsv(text: string): Candle[] {
 async function fetchBinance() {
   const button = el<HTMLButtonElement>("load-binance");
   const notice = el<HTMLElement>("notice");
+  const symbolSelect = el<HTMLSelectElement>("symbol");
+  const intervalSelect = el<HTMLSelectElement>("timeframe");
+  const startInput = el<HTMLInputElement>("range-start");
+  const endInput = el<HTMLInputElement>("range-end");
+  const wasDisabled = [symbolSelect.disabled, intervalSelect.disabled, startInput.disabled, endInput.disabled];
   button.disabled = true;
+  symbolSelect.disabled = true;
+  intervalSelect.disabled = true;
+  startInput.disabled = true;
+  endInput.disabled = true;
   notice.textContent = "Preparing historical Binance Futures data request…";
   try {
     const interval = el<HTMLSelectElement>("timeframe").value as SupportedInterval;
@@ -313,12 +325,17 @@ async function fetchBinance() {
         " candles." + rangeSummary + fundingSummary + markSummary + warningSummary + " Replay is paused at the beginning.",
       data.funding,
       data.marks,
+      { symbol: pair, interval },
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     notice.textContent = "Unable to load Binance data: " + message + ". You can import a CSV instead.";
   } finally {
     button.disabled = false;
+    symbolSelect.disabled = wasDisabled[0];
+    intervalSelect.disabled = wasDisabled[1];
+    startInput.disabled = wasDisabled[2];
+    endInput.disabled = wasDisabled[3];
   }
 }
 el<HTMLButtonElement>("play").addEventListener("click", () => {
