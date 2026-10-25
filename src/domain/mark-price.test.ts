@@ -14,15 +14,16 @@ describe("historical mark price helpers", () => {
   });
 
   it("uses the mark open at an exact event boundary", () => {
-    expect(historicalMarkAt(120_000, marks, 50)).toBe(102);
+    expect(historicalMarkAt(120_000, marks, 50, 60_000)).toBe(102);
   });
 
   it("uses the latest completed mark close without looking ahead", () => {
-    expect(historicalMarkAt(150_000, marks, 50)).toBe(104);
-    expect(historicalMarkAt(30_000, marks, 50)).toBe(50);
+    expect(historicalMarkAt(150_000, marks, 50, 60_000)).toBe(102);
+    expect(historicalMarkAt(180_000, marks, 50, 60_000)).toBe(104);
+    expect(historicalMarkAt(30_000, marks, 50, 60_000)).toBe(50);
   });
 
   it("rejects an invalid fallback", () => {
-    expect(() => historicalMarkAt(1, marks, 0)).toThrow(RangeError);
+    expect(() => historicalMarkAt(1, marks, 0, 60_000)).toThrow(RangeError);
   });
 });
