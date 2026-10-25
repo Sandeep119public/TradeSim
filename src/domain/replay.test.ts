@@ -32,6 +32,14 @@ describe("ReplayEngine", () => {
     expect(() => engine.setSpeed(0)).toThrow(RangeError);
   });
 
+  it("remains playing across automatic steps until the final candle", () => {
+    const engine = new ReplayEngine();
+    engine.load(candles);
+    expect(engine.play().status).toBe("playing");
+    expect(engine.step().status).toBe("playing");
+    expect(engine.step().status).toBe("ended");
+  });
+
   it("rejects non-increasing timestamps", () => {
     const engine = new ReplayEngine();
     expect(() => engine.load([candles[0], { ...candles[1], time: candles[0].time }])).toThrow(/timestamps/);
