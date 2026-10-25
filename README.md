@@ -43,7 +43,16 @@ npm run test:e2e:live             # optional live Binance smoke test; requires n
 
 The live smoke test loads the latest 1,000 fully closed candles in Chromium, requires all 1,000 aligned mark candles and a non-empty funding history, rejects exchange warnings or candle gaps, checks the returned dataset matches the selected symbol/timeframe, confirms the last candle is closed, and steps the replay once. It only uses public Binance Futures market-data endpoints and never places an order.
 
-The live check runs in the separate [Live Binance Smoke Test workflow](https://github.com/Sandeep119public/TradeSim/actions/workflows/live-binance-smoke.yml) when the workflow, Binance data loader, live test, or package configuration changes on the `feature/historical-data-range` branch. To run it manually, open that workflow, choose **Run workflow**, select the branch, and choose a market (`BTCUSDT`, `SOLUSDT`, or `ETHUSDT`) and timeframe (`1m`, `5m`, `15m`, or `1h`). Normal pull-request CI remains deterministic and uses mocked exchange responses. Rate limits, exchange availability, or network-region restrictions can affect the live smoke test.
+The live check runs in the separate [Live Binance Smoke Test workflow](https://github.com/Sandeep119public/TradeSim/actions/workflows/live-binance-smoke.yml) when the workflow, Binance data loader, live test, or package configuration changes on the `feature/historical-data-range` branch. A direct endpoint preflight runs before Chromium is installed; if Binance is unreachable from that runner, the browser test is skipped with a warning. Normal pull-request CI remains deterministic and uses mocked exchange responses.
+
+**Runner-region note:** On 25 October 2026, GitHub's hosted runner in Central US received HTTP 451 from Binance with a restricted-location message. The live browser test therefore could not verify exchange data from that runner. For an actual live check, run it on a machine/network where Binance USDⓈ-M public market data is available:
+
+```sh
+npx playwright install chromium
+npm run test:e2e:live
+```
+
+That defaults to `BTCUSDT` at `1m`. To choose a different market/timeframe in PowerShell, set `$env:TRADESIM_SMOKE_SYMBOL = "SOLUSDT"` and `$env:TRADESIM_SMOKE_INTERVAL = "5m"` before running the command. This test uses public market-data endpoints only and never places orders.
 
 ## Known limitations
 
