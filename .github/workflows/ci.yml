@@ -6,6 +6,26 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      symbol:
+        description: "Perpetual market to smoke-test against public Binance data"
+        type: choice
+        required: true
+        default: BTCUSDT
+        options:
+          - BTCUSDT
+          - SOLUSDT
+          - ETHUSDT
+      interval:
+        description: "Candle interval for the live smoke test"
+        type: choice
+        required: true
+        default: 1m
+        options:
+          - 1m
+          - 5m
+          - 15m
+          - 1h
 
 permissions:
   contents: read
@@ -34,4 +54,7 @@ jobs:
         run: npm run test:e2e
       - name: Live Binance browser smoke test (manual dispatch only)
         if: github.event_name == 'workflow_dispatch'
+        env:
+          TRADESIM_SMOKE_SYMBOL: ${{ inputs.symbol || 'BTCUSDT' }}
+          TRADESIM_SMOKE_INTERVAL: ${{ inputs.interval || '1m' }}
         run: npm run test:e2e:live
