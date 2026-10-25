@@ -9,6 +9,7 @@ TradeSim is a local-first simulator for replaying historical Binance USDⓈ-M fu
 - Public Binance Futures candle loading for the latest 1,000 closed candles or a selected date/time range, paginated across responses with transient/rate-limit retries
 - Explicit safety ceiling of 100,000 candles per load to protect browser memory and seek performance
 - Timestamp spacing diagnostics for Binance candles; missing bars are reported, never fabricated
+- Chromium end-to-end tests exercise historical-range pagination, in-flight control locking, optional-endpoint failures, and gap warnings using mocked Binance responses
 - Fetches public historical funding-rate events and mark-price candles for the loaded window when available
 - CSV candle import
 - Paper Long/Short orders with leverage and a margin preview
@@ -33,6 +34,8 @@ npm install
 npm run dev
 npm test
 npm run build
+npx playwright install chromium  # one-time browser install for local E2E runs
+npm run test:e2e
 ```
 
 ## Known limitations
