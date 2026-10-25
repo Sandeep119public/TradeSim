@@ -295,8 +295,14 @@ export async function loadBinanceHistoricalData({
   if (!Number.isFinite(nowMs)) throw new RangeError("nowMs must be finite");
   if (!Number.isInteger(maxCandles) || maxCandles < 1) throw new RangeError("maxCandles must be a positive integer");
   const intervalMs = intervalToMs(interval);
-  const requestedSlots = Math.floor((endTime - startTime) / intervalMs) + 1;
-  if (requestedSlots > maxCandles + 1) {
+  // Candle opens are interval-aligned. Count those actual slots, not an
+  // approximate duration-based count, so off-boundary times are handled safely.
+  const firstCandleTime = Math.ceil(startTime / intervalMs) * intervalMs;
+  const lastCandleTime = Math.floor(endTime / intervalMs) * intervalMs;
+  const requestedSlots = lastCandleTime >= firstCandleTime
+    ? Math.floor((lastCandleTime - firstCandleTime) / intervalMs) + 1
+    : 0;
+  if (requestedSlots > maxCandles) {
     throw new RangeError("Selected range exceeds the " + maxCandles.toLocaleString("en-US") + " candle safety limit; narrow the date range");
   }
 
