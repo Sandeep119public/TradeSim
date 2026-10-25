@@ -2,6 +2,7 @@ import "./style.css";
 import { createChart, CandlestickSeries, type IChartApi, type ISeriesApi, type Time } from "lightweight-charts";
 import type { Side } from "./domain/paper-account";
 import { ReplaySession, type HistoricalFunding, type OrderIntent } from "./domain/session-simulator";
+import { loadBinanceHistoricalData, intervalToMs, MAX_REPLAY_CANDLES, type SupportedInterval } from "./domain/historical-data";
 import type { MarkPriceCandle } from "./domain/mark-price";
 import type { Candle } from "./domain/market";
 
@@ -45,11 +46,16 @@ app.innerHTML = `
         <div><span class="eyebrow">HISTORICAL MARKET</span><h1 id="symbol-title">BTCUSDT <span>PERPETUAL</span></h1><p id="timestamp">Load a dataset to begin replay</p></div>
         <div class="market-controls"><label>Market<select id="symbol"><option>BTCUSDT</option><option>SOLUSDT</option><option>ETHUSDT</option></select></label><label>Timeframe<select id="timeframe"><option value="1m">1 minute</option><option value="5m">5 minutes</option><option value="15m">15 minutes</option><option value="1h">1 hour</option></select></label></div>
       </div>
+      <div class="data-range-controls">
+        <label>Start (local time)<input id="range-start" type="datetime-local"/></label>
+        <label>End (local time)<input id="range-end" type="datetime-local"/></label>
+        <p>Leave both dates blank for the latest 1,000 closed candles. Historical ranges are paginated, with a ${MAX_REPLAY_CANDLES.toLocaleString("en-US")} candle safety limit.</p>
+      </div>
       <div class="chart-card">
         <div class="chart-meta"><span>PRICE ACTION</span><span id="ohlc">Waiting for replay</span></div>
         <div id="chart" class="chart"></div>
         <div class="timeline"><div class="timeline-labels"><span id="start-time"></span><strong id="current-time"></strong><span id="end-time"></span></div><input id="seek" type="range" min="-1" max="119" value="-1" aria-label="Replay position"/></div>
-        <div class="replay-controls"><button id="step-back" class="ghost">−1 bar</button><button id="play" class="primary">▶ Play</button><button id="step" class="ghost">+1 bar</button><label>Speed<select id="speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option></select></label><button id="load-binance" class="ghost">Fetch Binance candles</button><input id="csv" type="file" accept=".csv,.txt" aria-label="Import CSV candles" hidden/><button id="import-csv" class="ghost">Import CSV</button></div>
+        <div class="replay-controls"><button id="step-back" class="ghost">−1 bar</button><button id="play" class="primary">▶ Play</button><button id="step" class="ghost">+1 bar</button><label>Speed<select id="speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option></select></label><button id="load-binance" class="ghost">Load Binance data</button><input id="csv" type="file" accept=".csv,.txt" aria-label="Import CSV candles" hidden/><button id="import-csv" class="ghost">Import CSV</button></div>
         <p id="notice" class="notice" role="status">Demo dataset loaded. Fetch Binance futures candles or import a CSV.</p>
       </div>
       <section class="section-card">
@@ -256,100 +262,61 @@ function parseCsv(text: string): Candle[] {
 }
 async function fetchBinance() {
   const button = el<HTMLButtonElement>("load-binance");
+  const notice = el<HTMLElement>("notice");
   button.disabled = true;
-  el<HTMLElement>("notice").textContent = "Fetching Binance Futures trade candles, historical funding, and mark-price candles…";
+  notice.textContent = "Preparing historical Binance Futures data request…";
   try {
-    const interval = el<HTMLSelectElement>("timeframe").value;
+    const interval = el<HTMLSelectElement>("timeframe").value as SupportedInterval;
     const pair = el<HTMLSelectElement>("symbol").value;
-    const intervalMs = interval === "1m" ? 60_000 : interval === "5m" ? 300_000 : interval === "15m" ? 900_000 : 3_600_000;
-    const url = new URL("https://fapi.binance.com/fapi/v1/klines");
-    url.search = new URLSearchParams({ symbol: pair, interval, limit: "1000" }).toString();
-    const response = await fetch(url, { headers: { accept: "application/json" } });
-    if (!response.ok) throw new Error(`Binance returned HTTP ${response.status}`);
-    const raw: unknown = await response.json();
-    if (!Array.isArray(raw)) throw new Error("Unexpected Binance response");
-    const rows = raw as unknown[][];
-    const next: Candle[] = rows.map((r) => ({
-      time: Number(r[0]), open: Number(r[1]), high: Number(r[2]),
-      low: Number(r[3]), close: Number(r[4]), volume: Number(r[5]),
-    }));
-    if (next.length === 0) throw new Error("Binance returned no candles");
-    if (next[next.length - 1].time + intervalMs > Date.now()) next.pop();
-    if (next.length === 0) throw new Error("No fully closed candles are available");
+    const intervalMs = intervalToMs(interval);
+    const rawStart = el<HTMLInputElement>("range-start").value;
+    const rawEnd = el<HTMLInputElement>("range-end").value;
 
-    let historicalFunding: HistoricalFunding[] = [];
-    let fundingMessage = "";
-    try {
-      const fundingUrl = new URL("https://fapi.binance.com/fapi/v1/fundingRate");
-      fundingUrl.search = new URLSearchParams({
-        symbol: pair,
-        startTime: String(next[0].time),
-        endTime: String(next[next.length - 1].time + intervalMs - 1),
-        limit: "1000",
-      }).toString();
-      const fundingResponse = await fetch(fundingUrl, { headers: { accept: "application/json" } });
-      if (!fundingResponse.ok) throw new Error(`Funding endpoint returned HTTP ${fundingResponse.status}`);
-      const fundingRaw: unknown = await fundingResponse.json();
-      if (!Array.isArray(fundingRaw)) throw new Error("Unexpected funding response");
-      historicalFunding = (fundingRaw as Array<Record<string, unknown>>).map((row) => {
-        const mark = Number(row.markPrice);
-        return {
-          fundingTime: Number(row.fundingTime),
-          fundingRate: Number(row.fundingRate),
-          markPrice: Number.isFinite(mark) && mark > 0 ? mark : null,
-        };
-      }).filter((event) => Number.isFinite(event.fundingTime) && Number.isFinite(event.fundingRate));
-      fundingMessage = ` ${historicalFunding.length} historical funding event(s) loaded.`;
-    } catch {
-      fundingMessage = " Funding history unavailable; trades will not include funding for this dataset.";
+    let startTime: number;
+    let endTime: number;
+    if (!rawStart && !rawEnd) {
+      // Preserve the one-click default: load the latest 1,000 fully closed bars.
+      endTime = Math.floor(Date.now() / intervalMs) * intervalMs - intervalMs;
+      startTime = endTime - 999 * intervalMs;
+    } else {
+      if (!rawStart || !rawEnd) throw new Error("Choose both a start and end date/time, or leave both blank for the latest candles.");
+      startTime = new Date(rawStart).getTime();
+      endTime = new Date(rawEnd).getTime();
+      if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || startTime < 0 || endTime < startTime) {
+        throw new Error("Start date/time must be before or equal to end date/time.");
+      }
     }
 
-    let historicalMarks: MarkPriceCandle[] = [];
-    let markMessage = "";
-    try {
-      const markUrl = new URL("https://fapi.binance.com/fapi/v1/markPriceKlines");
-      markUrl.search = new URLSearchParams({
-        symbol: pair,
-        interval,
-        startTime: String(next[0].time),
-        endTime: String(next[next.length - 1].time + intervalMs - 1),
-        limit: "1000",
-      }).toString();
-      const markResponse = await fetch(markUrl, { headers: { accept: "application/json" } });
-      if (!markResponse.ok) throw new Error("Mark-price endpoint returned HTTP " + markResponse.status);
-      const markRaw: unknown = await markResponse.json();
-      if (!Array.isArray(markRaw)) throw new Error("Unexpected mark-price response");
-      historicalMarks = (markRaw as unknown[][]).map((row) => ({
-        time: Number(row[0]),
-        open: Number(row[1]),
-        high: Number(row[2]),
-        low: Number(row[3]),
-        close: Number(row[4]),
-      })).filter((mark) =>
-        Number.isFinite(mark.time) &&
-        [mark.open, mark.high, mark.low, mark.close].every((price) => Number.isFinite(price) && price > 0) &&
-        mark.high >= Math.max(mark.open, mark.close, mark.low) &&
-        mark.low <= Math.min(mark.open, mark.close, mark.high)
-      ).sort((a, b) => a.time - b.time);
-      const availableTimes = new Set(historicalMarks.map((mark) => mark.time));
-      const aligned = next.filter((candle) => availableTimes.has(candle.time)).length;
-      markMessage = " " + aligned + "/" + next.length + " candle-aligned mark-price candles loaded.";
-      if (aligned < next.length) markMessage += " Missing mark candles use trade-price fallback for mark-to-market/liquidation; funding settlements without a valid historical mark are skipped and logged.";
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      markMessage = " Historical mark-price candles unavailable (" + reason + "); mark-to-market and liquidation will fall back to trade candles. Funding settlements without an event mark or completed prior mark are skipped and logged.";
-    }
+    const data = await loadBinanceHistoricalData({
+      symbol: pair,
+      interval,
+      startTime,
+      endTime,
+      maxCandles: MAX_REPLAY_CANDLES,
+      onProgress: (progress) => {
+        notice.textContent = "Loading " + progress.dataset + " · page " + progress.page +
+          " · " + progress.records.toLocaleString("en-US") + " record(s) collected…";
+      },
+    });
 
+    const alignedMarks = new Set(data.marks.map((mark) => mark.time));
+    const alignedCount = data.candles.filter((candle) => alignedMarks.has(candle.time)).length;
+    const rangeSummary = " Range: " + date(data.candles[0].time) + " to " + date(data.candles[data.candles.length - 1].time) + ".";
+    const fundingSummary = " " + data.funding.length.toLocaleString("en-US") + " historical funding event(s) loaded.";
+    const markSummary = " " + alignedCount.toLocaleString("en-US") + "/" +
+      data.candles.length.toLocaleString("en-US") + " candle-aligned mark-price candles loaded.";
+    const warningSummary = data.warnings.length ? " Warnings: " + data.warnings.join(" ") : " No candle timestamp gaps detected.";
     symbol = pair;
     setData(
-      next,
-      "Loaded " + next.length + " public Binance Futures " + symbol + " candles." + fundingMessage + markMessage + " Replay is paused at the beginning.",
-      historicalFunding,
-      historicalMarks,
+      data.candles,
+      "Loaded " + data.candles.length.toLocaleString("en-US") + " public Binance Futures " + symbol +
+        " candles." + rangeSummary + fundingSummary + markSummary + warningSummary + " Replay is paused at the beginning.",
+      data.funding,
+      data.marks,
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    el<HTMLElement>("notice").textContent = `Unable to fetch Binance data: ${message}. You can import a CSV instead.`;
+    notice.textContent = "Unable to load Binance data: " + message + ". You can import a CSV instead.";
   } finally {
     button.disabled = false;
   }
