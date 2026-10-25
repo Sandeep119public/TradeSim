@@ -6,7 +6,9 @@ TradeSim is a local-first simulator for replaying historical Binance USDⓈ-M fu
 
 - TypeScript + Vite web terminal and Lightweight Charts candlestick chart
 - Candle replay with play/pause, speed, single-step and seeking
-- Public Binance Futures kline fetch for a bounded recent window (up to 1,000 candles)
+- Public Binance Futures candle loading for the latest 1,000 closed candles or a selected date/time range, paginated across responses with transient/rate-limit retries
+- Explicit safety ceiling of 100,000 candles per load to protect browser memory and seek performance
+- Timestamp spacing diagnostics for Binance candles; missing bars are reported, never fabricated
 - Fetches public historical funding-rate events and mark-price candles for the loaded window when available
 - CSV candle import
 - Paper Long/Short orders with leverage and a margin preview
@@ -37,7 +39,7 @@ npm run build
 
 - This is an early prototype. Check [GitHub Actions](https://github.com/Sandeep119public/TradeSim/actions) for current build/test status.
 - Seeking rebuilds account/order/funding state from the ordered action journal. Placing an action after seeking branches the session and drops actions from later replay indices.
-- The Binance market-data download has no arbitrary date-range pagination or retry/resume yet; it is still bounded to 1,000 candles.
+- The Binance loader paginates selected date ranges with bounded retries for network, rate-limit, and transient server errors. Each load is capped at 100,000 candles; resumable downloads and persistent caching are not yet implemented.
 - The liquidation model uses historical mark-price OHLC when aligned mark candles are available, but still uses a simplified fixed 0.5% maintenance-margin rate. It is not Binance's exact mark-price/bracket-accurate liquidation model.
 - Funding uses the historical funding-rate endpoint and prefers its event mark price. If absent, an exact-time or still-available mark-candle open, then the latest completed prior mark close is used. If neither exists, the settlement is skipped and recorded; no trade-candle close fallback is used.
 - The simulator supports one open position at a time and does not yet model partial fills, queue position, tick/step size constraints, standalone stop-market entry orders, or editable SL/TP after entry.
