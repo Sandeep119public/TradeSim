@@ -161,6 +161,7 @@ function drawPosition() {
 }
 function replayStep() {
   const previous = snapshot().index;
+  if (snapshot().status !== "playing") replay.play();
   const state = replay.step();
   if (state.index >= 0 && state.index !== previous) {
     const candle = state.candle!;
@@ -180,8 +181,8 @@ function resetReplay() {
 function seekReplay(index: number) {
   stopTimer();
   replay.seek(index);
-  // Do not allow seeking to show account state from the future. V1 resets paper
-  // state on seek; deterministic account reconstruction will replace this in v2.
+  // Until event-journal reconstruction is implemented, seeking resets the
+  // account and explicitly prevents prior trades from leaking across time.
   account = new PaperAccount();
   if (index >= 0) account.updateMark(candles[index].close);
   drawChart();
@@ -229,6 +230,8 @@ async function fetchBinance() {
       low: Number(r[3]), close: Number(r[4]), volume: Number(r[5]),
     }));
     if (next.length === 0) throw new Error("Binance returned no candles");
+    if (next[next.length - 1].time + (interval === "1m" ? 60_000 : interval === "5m" ? 300_000 : interval === "15m" ? 900_000 : 3_600_000) > Date.now()) next.pop();
+    if (next.length === 0) throw new Error("No fully closed candles are available");
     symbol = pair;
     el<HTMLElement>("symbol-title").innerHTML = `${symbol} <span>PERPETUAL</span>`;
     setData(next, `Loaded ${next.length} public Binance Futures ${symbol} candles. Replay is paused at the beginning.`);
@@ -247,7 +250,7 @@ el<HTMLButtonElement>("play").addEventListener("click", () => {
   replay.play();
   replayStep();
 });
-el<HTMLButtonElement>("step").addEventListener("click", () => { stopTimer(); replay.pause(); replayStep(); });
+el<HTMLButtonElement>("step").addEventListener("click", () => { stopTimer(); replay.pause(); replay.step(); const candle = snapshot().candle; if (candle) account.updateMark(candle.close); drawChart(); });
 el<HTMLButtonElement>("step-back").addEventListener("click", () => seekReplay(Math.max(-1, snapshot().index - 1)));
 el<HTMLInputElement>("seek").addEventListener("input", (event) => seekReplay(Number((event.target as HTMLInputElement).value)));
 el<HTMLSelectElement>("speed").addEventListener("change", (event) => {
