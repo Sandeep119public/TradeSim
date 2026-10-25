@@ -14,7 +14,7 @@ export interface LiquidationExit {
  */
 export function resolveLiquidationExit(
   side: "LONG" | "SHORT",
-  candle: Candle,
+  candle: Pick<Candle, "open" | "high" | "low">,
   candleIndex: number,
   openedIndex: number,
   liquidationPrice: number | null,
