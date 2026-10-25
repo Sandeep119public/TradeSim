@@ -44,6 +44,13 @@ describe("resolveLiquidationExit", () => {
     });
   });
 
+  it("accepts mark-price OHLC independently of the trade candle", () => {
+    expect(resolveLiquidationExit("LONG", { open: 98, high: 99, low: 89 }, 6, 5, 90)).toEqual({
+      price: 90,
+      reason: "LIQUIDATION",
+    });
+  });
+
   it("does nothing when the liquidation threshold is not crossed or is unavailable", () => {
     expect(resolveLiquidationExit("LONG", { ...bar, low: 92 }, 6, 5, 90)).toBeNull();
     expect(resolveLiquidationExit("LONG", bar, 6, 5, null)).toBeNull();
