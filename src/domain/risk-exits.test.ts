@@ -12,13 +12,22 @@ const bar: Candle = {
 };
 
 describe("resolveRiskExit", () => {
-  it("does not trigger on the candle where a position opened", () => {
+  it("does not inspect a candle before the position opened", () => {
+    expect(resolveRiskExit(
+      { side: "LONG", stopLossPrice: 95, takeProfitPrice: 110 },
+      bar,
+      9,
+      10,
+    )).toBeNull();
+  });
+
+  it("evaluates the opening candle after a fill", () => {
     expect(resolveRiskExit(
       { side: "LONG", stopLossPrice: 95, takeProfitPrice: 110 },
       bar,
       10,
       10,
-    )).toBeNull();
+    )).toEqual({ price: 95, reason: "STOP_LOSS" });
   });
 
   it("triggers a long stop loss at its level when the open is not beyond it", () => {

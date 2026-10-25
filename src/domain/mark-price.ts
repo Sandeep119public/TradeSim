@@ -19,36 +19,36 @@ export function matchMarkCandle(
 
 /**
  * Resolve an approximate historical mark at an event timestamp. An exact
- * candle boundary uses that candle's open; between boundaries the most recent
- * completed mark candle's close is used. No future mark price is consulted.
+ * candle boundary uses that candle's open. Inside an unfinished candle, its
+ * open is the latest observation known so far; otherwise the latest completed
+ * candle's close is used. Returns null when no observation was available by the
+ * event time; callers must not substitute an unfinished candle close.
  */
 export function historicalMarkAt(
   timestamp: number,
   sortedMarkCandles: readonly MarkPriceCandle[],
-  fallback: number,
   intervalMs: number,
-): number {
+): number | null {
   if (!Number.isFinite(timestamp)) throw new RangeError("Timestamp must be finite");
-  if (!Number.isFinite(fallback) || fallback <= 0) {
-    throw new RangeError("Fallback price must be finite and positive");
-  }
   if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
     throw new RangeError("Candle interval must be finite and positive");
   }
 
   let low = 0;
   let high = sortedMarkCandles.length - 1;
-  let latestCompleted = -1;
+  let latestKnown = -1;
   while (low <= high) {
     const middle = Math.floor((low + high) / 2);
     const candle = sortedMarkCandles[middle];
     if (candle.time === timestamp) return candle.open;
-    if (candle.time + intervalMs <= timestamp) {
-      latestCompleted = middle;
+    if (candle.time <= timestamp) {
+      latestKnown = middle;
       low = middle + 1;
     } else {
       high = middle - 1;
     }
   }
-  return latestCompleted >= 0 ? sortedMarkCandles[latestCompleted].close : fallback;
+  if (latestKnown < 0) return null;
+  const candle = sortedMarkCandles[latestKnown];
+  return candle.time + intervalMs <= timestamp ? candle.close : candle.open;
 }

@@ -12,8 +12,15 @@ const bar: Candle = {
 };
 
 describe("resolveLiquidationExit", () => {
-  it("does not liquidate on the candle where a position opened", () => {
-    expect(resolveLiquidationExit("LONG", bar, 5, 5, 90)).toBeNull();
+  it("does not liquidate on a candle before the position opened", () => {
+    expect(resolveLiquidationExit("LONG", bar, 4, 5, 90)).toBeNull();
+  });
+
+  it("evaluates the opening candle after a fill", () => {
+    expect(resolveLiquidationExit("LONG", bar, 5, 5, 90)).toEqual({
+      price: 90,
+      reason: "LIQUIDATION",
+    });
   });
 
   it("liquidates a long at the threshold when the open is above it", () => {
