@@ -20,6 +20,13 @@ let side: Side = "LONG";
 let orderType: "market" | "limit" = "market";
 let limitPrice: number | null = null;
 let candles: Candle[] = [];
+interface HistoricalFunding {
+  fundingTime: number;
+  fundingRate: number;
+  markPrice: number | null;
+}
+let fundingEvents: HistoricalFunding[] = [];
+let fundingCursor = 0;
 
 type OrderStatus = "PENDING" | "FILLED" | "REJECTED" | "CANCELLED";
 interface PaperOrder {
@@ -82,7 +89,7 @@ app.innerHTML = `
       </div>
       <section class="section-card">
         <div class="section-title"><div><span class="eyebrow">ACCOUNT</span><h2>Paper account</h2></div><span class="paper-tag">NO REAL ORDERS</span></div>
-        <div class="stats-grid"><div><span>Wallet balance</span><strong id="wallet">$10,000.00</strong></div><div><span>Equity</span><strong id="equity">$10,000.00</strong></div><div><span>Unrealized P&amp;L</span><strong id="unrealized">$0.00</strong></div><div><span>Realized P&amp;L</span><strong id="realized">$0.00</strong></div><div><span>Used margin</span><strong id="margin">$0.00</strong></div><div><span>Available margin</span><strong id="available">$10,000.00</strong></div></div>
+        <div class="stats-grid"><div><span>Wallet balance</span><strong id="wallet">$10,000.00</strong></div><div><span>Equity</span><strong id="equity">$10,000.00</strong></div><div><span>Unrealized P&amp;L</span><strong id="unrealized">$0.00</strong></div><div><span>Realized P&amp;L</span><strong id="realized">$0.00</strong></div><div><span>Used margin</span><strong id="margin">$0.00</strong></div><div><span>Available margin</span><strong id="available">$10,000.00</strong></div><div><span>Net funding</span><strong id="funding">$0.00</strong></div></div>
       </section>
     </section>
     <aside class="trade-column">
@@ -162,6 +169,7 @@ function drawChart() {
   el<HTMLElement>("realized").textContent = money(acc.realizedPnl);
   el<HTMLElement>("margin").textContent = money(acc.usedMargin);
   el<HTMLElement>("available").textContent = money(acc.availableMargin);
+  el<HTMLElement>("funding").textContent = money(acc.netFunding);
   for (const id of ["unrealized", "realized"]) {
     const node = el<HTMLElement>(id);
     node.classList.toggle("positive", Number(node.textContent?.replace(/[^0-9.-]/g, "")) >= 0);
@@ -254,10 +262,29 @@ function processPendingOrders(candle: Candle, index: number) {
     }
   }
 }
+function processFundingEvents(candle: Candle) {
+  while (fundingCursor < fundingEvents.length && fundingEvents[fundingCursor].fundingTime <= candle.time) {
+    const event = fundingEvents[fundingCursor];
+    fundingCursor += 1;
+    const position = account.snapshot().position;
+    if (!position) continue;
+    const markPrice = event.markPrice ?? candle.close;
+    const payment = account.applyFunding(event.fundingRate, markPrice);
+    const flow = payment < 0 ? "paid" : "received";
+    recordActivity(`FUNDING ${flow} ${money(Math.abs(payment))} · rate ${(event.fundingRate * 100).toFixed(4)}%`, payment < 0 ? "negative" : "positive");
+  }
+}
+function resetFundingCursorForReplayIndex(index: number) {
+  const timestamp = index >= 0 ? candles[index]?.time ?? -Infinity : -Infinity;
+  const next = fundingEvents.findIndex((event) => event.fundingTime > timestamp);
+  fundingCursor = next < 0 ? fundingEvents.length : next;
+}
 function advanceOneBar() {
   const previous = snapshot().index;
   const state = replay.step();
   if (state.index >= 0 && state.index !== previous && state.candle) {
+    // Settle before this candle’s entry fills, so a newly opened position does not receive funding at that timestamp.
+    processFundingEvents(state.candle);
     processPendingOrders(state.candle, state.index);
     const position = account.snapshot().position;
     if (position && state.index > positionOpenedIndex) {
@@ -286,13 +313,16 @@ function seekReplay(index: number) {
   // Event-journal reconstruction comes later. V1 clears trading history on
   // seek so future orders and positions can never leak into earlier bars.
   clearTradingSession();
+  resetFundingCursorForReplayIndex(index);
   if (index >= 0) account.updateMark(candles[index].close);
   drawChart();
 }
-function setData(next: Candle[], message: string) {
+function setData(next: Candle[], message: string, funding: HistoricalFunding[] = []) {
   stopTimer();
   replay.load(next);
   candles = next;
+  fundingEvents = [...funding].sort((a, b) => a.fundingTime - b.fundingTime);
+  fundingCursor = 0;
   marketDataSymbol = el<HTMLSelectElement>("symbol").value;
   marketDataInterval = el<HTMLSelectElement>("timeframe").value;
   clearTradingSession();
