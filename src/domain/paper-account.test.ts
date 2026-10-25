@@ -81,6 +81,29 @@ describe("PaperAccount", () => {
     expect(() => account.applyFunding(0.001, 100)).toThrow(/open position/);
   });
 
+  it("exposes a simplified cross-equity liquidation estimate", () => {
+    const account = new PaperAccount({
+      startingBalance: 1_000,
+      feeRate: 0.0005,
+      maintenanceMarginRate: 0.005,
+    });
+    const state = account.open({
+      symbol: "BTCUSDT", side: "LONG", quantity: 99, price: 100, leverage: 10,
+    });
+    expect(state.liquidationPrice).not.toBeNull();
+    expect(state.liquidationPrice!).toBeGreaterThan(0);
+    expect(state.liquidationPrice!).toBeLessThan(100);
+    expect(state.maintenanceMargin).toBeCloseTo(49.5);
+  });
+
+  it("does not expose a positive long liquidation level when cross collateral is sufficient", () => {
+    const account = new PaperAccount({ startingBalance: 10_000, feeRate: 0 });
+    const state = account.open({
+      symbol: "BTCUSDT", side: "LONG", quantity: 1, price: 100, leverage: 10,
+    });
+    expect(state.liquidationPrice).toBeNull();
+  });
+
   it("rejects entries beyond available margin", () => {
     const account = new PaperAccount({ startingBalance: 100, feeRate: 0 });
     expect(() => account.open({ symbol: "BTCUSDT", side: "LONG", quantity: 10, price: 100, leverage: 1 })).toThrow(/Insufficient/);
