@@ -15,14 +15,14 @@
 - [x] Load historical Binance funding rates and apply settlements through replay time.
 - [x] Add funding cash-flow accounting and realized P&L integration.
 - [x] Add fixed-rate maintenance-margin and simplified liquidation estimate/trigger with tests.
-- [ ] Preserve and reconstruct account/order/funding history deterministically on seek.
+- [x] Preserve and reconstruct account/order/funding history deterministically on seek.
 - [ ] Add cancel/replace behavior and more complete closed-trade reporting.
 
 ## Milestone 2: Binance historical datasets
 - [x] Fetch a bounded window of public USDⓈ-M Futures klines.
 - [x] Fetch historical funding-rate events for the loaded window.
 - [ ] Add date-range pagination, retries and rate-limit handling.
-- [ ] Fetch historical mark-price candles so liquidation and funding use the correct price source.
+- [x] Fetch historical mark-price candles so mark-to-market and liquidation checks use a better price source.
 - [ ] Harden CSV schema detection and error reporting.
 - [ ] Persist datasets locally for offline replay.
 - [ ] Validate consistent interval and detect timestamp gaps.
@@ -36,7 +36,7 @@
 - [ ] Add partial fills and more realistic spread/market impact assumptions.
 
 ## Milestone 4: Research workflow
-- [ ] Event journal and reproducible replay seek.
+- [x] Event journal and reproducible replay seek with future-action truncation when branching.
 - [ ] Trade log, equity curve, drawdown and performance summary.
 - [ ] Save and restore replay sessions.
 
