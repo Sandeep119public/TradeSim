@@ -43,8 +43,11 @@ export class ReplayEngine {
       this.status = "ended";
       return this.snapshot();
     }
+    const wasPlaying = this.status === "playing";
     this.cursor += 1;
-    this.status = this.cursor === this.candles.length - 1 ? "ended" : "paused";
+    this.status = this.cursor === this.candles.length - 1
+      ? "ended"
+      : wasPlaying ? "playing" : "paused";
     return this.snapshot();
   }
 
