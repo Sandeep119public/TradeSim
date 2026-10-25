@@ -350,10 +350,11 @@ function parseCsv(text: string): Candle[] {
 async function fetchBinance() {
   const button = el<HTMLButtonElement>("load-binance");
   button.disabled = true;
-  el<HTMLElement>("notice").textContent = "Fetching public Binance USDⓈ-M futures candles…";
+  el<HTMLElement>("notice").textContent = "Fetching public Binance USDⓈ-M futures candles and funding history…";
   try {
     const interval = el<HTMLSelectElement>("timeframe").value;
     const pair = el<HTMLSelectElement>("symbol").value;
+    const intervalMs = interval === "1m" ? 60_000 : interval === "5m" ? 300_000 : interval === "15m" ? 900_000 : 3_600_000;
     const url = new URL("https://fapi.binance.com/fapi/v1/klines");
     url.search = new URLSearchParams({ symbol: pair, interval, limit: "1000" }).toString();
     const response = await fetch(url, { headers: { accept: "application/json" } });
@@ -366,10 +367,38 @@ async function fetchBinance() {
       low: Number(r[3]), close: Number(r[4]), volume: Number(r[5]),
     }));
     if (next.length === 0) throw new Error("Binance returned no candles");
-    if (next[next.length - 1].time + (interval === "1m" ? 60_000 : interval === "5m" ? 300_000 : interval === "15m" ? 900_000 : 3_600_000) > Date.now()) next.pop();
+    if (next[next.length - 1].time + intervalMs > Date.now()) next.pop();
     if (next.length === 0) throw new Error("No fully closed candles are available");
+
+    let historicalFunding: HistoricalFunding[] = [];
+    let fundingMessage = "";
+    try {
+      const fundingUrl = new URL("https://fapi.binance.com/fapi/v1/fundingRate");
+      fundingUrl.search = new URLSearchParams({
+        symbol: pair,
+        startTime: String(next[0].time),
+        endTime: String(next[next.length - 1].time + intervalMs - 1),
+        limit: "1000",
+      }).toString();
+      const fundingResponse = await fetch(fundingUrl, { headers: { accept: "application/json" } });
+      if (!fundingResponse.ok) throw new Error(`Funding endpoint returned HTTP ${fundingResponse.status}`);
+      const fundingRaw: unknown = await fundingResponse.json();
+      if (!Array.isArray(fundingRaw)) throw new Error("Unexpected funding response");
+      historicalFunding = (fundingRaw as Array<Record<string, unknown>>).map((row) => {
+        const mark = Number(row.markPrice);
+        return {
+          fundingTime: Number(row.fundingTime),
+          fundingRate: Number(row.fundingRate),
+          markPrice: Number.isFinite(mark) && mark > 0 ? mark : null,
+        };
+      }).filter((event) => Number.isFinite(event.fundingTime) && Number.isFinite(event.fundingRate));
+      fundingMessage = ` ${historicalFunding.length} historical funding event(s) loaded.`;
+    } catch {
+      fundingMessage = " Funding history unavailable; trades will not include funding for this dataset.";
+    }
+
     symbol = pair;
-    setData(next, `Loaded ${next.length} public Binance Futures ${symbol} candles. Replay is paused at the beginning.`);
+    setData(next, `Loaded ${next.length} public Binance Futures ${symbol} candles.${fundingMessage} Replay is paused at the beginning.`, historicalFunding);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     el<HTMLElement>("notice").textContent = `Unable to fetch Binance data: ${message}. You can import a CSV instead.`;
@@ -377,7 +406,6 @@ async function fetchBinance() {
     button.disabled = false;
   }
 }
-
 el<HTMLButtonElement>("play").addEventListener("click", () => {
   if (snapshot().status === "playing") {
     stopTimer();
