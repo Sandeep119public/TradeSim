@@ -20,6 +20,9 @@ export interface AccountSnapshot {
   fundingPaid: number;
   fundingReceived: number;
   netFunding: number;
+  maintenanceMargin: number;
+  liquidationPrice: number | null;
+  marginRatio: number;
   usedMargin: number;
   availableMargin: number;
   position: Position | null;
@@ -29,6 +32,7 @@ export interface AccountSnapshot {
 export interface PaperAccountOptions {
   startingBalance?: number;
   feeRate?: number;
+  maintenanceMarginRate?: number;
 }
 
 function positive(value: number, label: string): number {
@@ -40,6 +44,7 @@ function positive(value: number, label: string): number {
 export class PaperAccount {
   private readonly startingBalance: number;
   private readonly feeRate: number;
+  private readonly maintenanceMarginRate: number;
   private walletBalance: number;
   private grossRealizedPnl = 0;
   private feesPaid = 0;
@@ -49,10 +54,14 @@ export class PaperAccount {
   private position: Position | null = null;
   private markPrice: number | null = null;
 
-  constructor({ startingBalance = 10_000, feeRate = 0.0005 }: PaperAccountOptions = {}) {
+  constructor({ startingBalance = 10_000, feeRate = 0.0005, maintenanceMarginRate = 0.005 }: PaperAccountOptions = {}) {
     this.startingBalance = positive(startingBalance, "Starting balance");
     if (!Number.isFinite(feeRate) || feeRate < 0 || feeRate >= 1) throw new RangeError("Fee rate must be in [0, 1)");
     this.feeRate = feeRate;
+    if (!Number.isFinite(maintenanceMarginRate) || maintenanceMarginRate < 0 || maintenanceMarginRate >= 1) {
+      throw new RangeError("Maintenance margin rate must be in [0, 1)");
+    }
+    this.maintenanceMarginRate = maintenanceMarginRate;
     this.walletBalance = this.startingBalance;
   }
 
@@ -153,7 +162,17 @@ export class PaperAccount {
       ? (mark - p.entryPrice) * p.quantity * (p.side === "LONG" ? 1 : -1)
       : 0;
     const usedMargin = p ? p.entryPrice * p.quantity / p.leverage : 0;
+    const maintenanceMargin = p && mark !== null ? mark * p.quantity * this.maintenanceMarginRate : 0;
     const equity = this.walletBalance + unrealizedPnl;
+    let liquidationPrice: number | null = null;
+    if (p) {
+      const numerator = p.side === "LONG"
+        ? p.entryPrice * p.quantity - this.walletBalance
+        : p.entryPrice * p.quantity + this.walletBalance;
+      const denominator = p.quantity * (p.side === "LONG" ? 1 - this.maintenanceMarginRate : 1 + this.maintenanceMarginRate);
+      const candidate = numerator / denominator;
+      if (Number.isFinite(candidate) && candidate > 0) liquidationPrice = candidate;
+    }
     return {
       walletBalance: this.walletBalance,
       equity,
@@ -163,6 +182,9 @@ export class PaperAccount {
       fundingPaid: this.fundingPaid,
       fundingReceived: this.fundingReceived,
       netFunding: this.netFunding,
+      maintenanceMargin,
+      liquidationPrice,
+      marginRatio: equity > 0 ? maintenanceMargin / equity : 1,
       usedMargin,
       availableMargin: equity - usedMargin,
       position: p ? { ...p } : null,
