@@ -7,6 +7,8 @@ export interface Position {
   entryPrice: number;
   entryFee: number;
   leverage: number;
+  stopLossPrice: number | null;
+  takeProfitPrice: number | null;
 }
 
 export interface AccountSnapshot {
@@ -53,8 +55,9 @@ export class PaperAccount {
     return this.snapshot();
   }
 
-  open({ symbol, side, quantity, price, leverage }: {
+  open({ symbol, side, quantity, price, leverage, stopLossPrice = null, takeProfitPrice = null }: {
     symbol: string; side: Side; quantity: number; price: number; leverage: number;
+    stopLossPrice?: number | null; takeProfitPrice?: number | null;
   }): AccountSnapshot {
     if (this.position) throw new Error("This v1 account supports one open position at a time");
     quantity = positive(quantity, "Quantity");
@@ -62,6 +65,18 @@ export class PaperAccount {
     leverage = positive(leverage, "Leverage");
     if (!Number.isInteger(leverage) || leverage > 125) throw new RangeError("Leverage must be an integer from 1x to 125x");
     if (!symbol.trim()) throw new Error("Symbol is required");
+    if (stopLossPrice !== null) {
+      stopLossPrice = positive(stopLossPrice, "Stop-loss price");
+      if (side === "LONG" ? stopLossPrice >= price : stopLossPrice <= price) {
+        throw new RangeError("Stop-loss must be below entry for a long and above entry for a short");
+      }
+    }
+    if (takeProfitPrice !== null) {
+      takeProfitPrice = positive(takeProfitPrice, "Take-profit price");
+      if (side === "LONG" ? takeProfitPrice <= price : takeProfitPrice >= price) {
+        throw new RangeError("Take-profit must be above entry for a long and below entry for a short");
+      }
+    }
 
     const notional = quantity * price;
     const fee = notional * this.feeRate;
@@ -71,7 +86,10 @@ export class PaperAccount {
 
     this.walletBalance -= fee;
     this.feesPaid += fee;
-    this.position = { symbol: symbol.toUpperCase(), side, quantity, entryPrice: price, entryFee: fee, leverage };
+    this.position = {
+      symbol: symbol.toUpperCase(), side, quantity, entryPrice: price, entryFee: fee, leverage,
+      stopLossPrice, takeProfitPrice,
+    };
     this.markPrice = price;
     return this.snapshot();
   }
