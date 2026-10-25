@@ -5,6 +5,8 @@ import { ReplayEngine } from "./domain/replay";
 import { resolveFillPrice } from "./domain/matching";
 import { resolveRiskExit } from "./domain/risk-exits";
 import { resolveLiquidationExit } from "./domain/liquidation";
+import { ReplayActionJournal } from "./domain/session-journal";
+import { historicalMarkAt, matchMarkCandle, type MarkPriceCandle } from "./domain/mark-price";
 import type { Candle } from "./domain/market";
 
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -28,6 +30,8 @@ interface HistoricalFunding {
 }
 let fundingEvents: HistoricalFunding[] = [];
 let fundingCursor = 0;
+let historicalMarkCandles: MarkPriceCandle[] = [];
+let markCandlesByTime = new Map<number, MarkPriceCandle>();
 
 type OrderStatus = "PENDING" | "FILLED" | "REJECTED" | "CANCELLED";
 interface PaperOrder {
@@ -50,6 +54,23 @@ interface ActivityItem {
   message: string;
   tone: "" | "positive" | "negative";
 }
+interface OrderIntent {
+  symbol: string;
+  side: Side;
+  type: "market" | "limit";
+  quantity: number;
+  leverage: number;
+  limitPrice: number | null;
+  stopLossPrice: number | null;
+  takeProfitPrice: number | null;
+}
+type SessionAction =
+  | { kind: "submit"; index: number; order: OrderIntent }
+  | { kind: "close"; index: number }
+  | { kind: "cancel-pending"; index: number }
+  | { kind: "reset"; index: number };
+
+const sessionJournal = new ReplayActionJournal<SessionAction>();
 let orders: PaperOrder[] = [];
 let activity: ActivityItem[] = [];
 let nextOrderId = 1;
@@ -89,7 +110,7 @@ app.innerHTML = `
         <p id="notice" class="notice" role="status">Demo dataset loaded. Fetch Binance futures candles or import a CSV.</p>
       </div>
       <section class="section-card">
-        <div class="section-title"><div><span class="eyebrow">ACCOUNT</span><h2>Paper account</h2></div><span class="paper-tag">NO REAL ORDERS</span></div><p>Liquidation estimate uses a simplified 0.5% maintenance rate and replay OHLC prices, not Binance mark-price liquidation brackets.</p>
+        <div class="section-title"><div><span class="eyebrow">ACCOUNT</span><h2>Paper account</h2></div><span class="paper-tag">NO REAL ORDERS</span></div><p>Loaded Binance mark-price candles drive mark-to-market and liquidation checks when available. Demo/CSV data falls back to trade OHLC. Maintenance margin is a simplified fixed 0.5%, not Binance's symbol-specific brackets.</p>
         <div class="stats-grid"><div><span>Wallet balance</span><strong id="wallet">$10,000.00</strong></div><div><span>Equity</span><strong id="equity">$10,000.00</strong></div><div><span>Unrealized P&amp;L</span><strong id="unrealized">$0.00</strong></div><div><span>Realized P&amp;L</span><strong id="realized">$0.00</strong></div><div><span>Used margin</span><strong id="margin">$0.00</strong></div><div><span>Available margin</span><strong id="available">$10,000.00</strong></div><div><span>Net funding</span><strong id="funding">$0.00</strong></div></div>
       </section>
     </section>
@@ -196,8 +217,9 @@ function drawPosition() {
   const closeButton = el<HTMLButtonElement>("close");
   closeButton.disabled = !position;
   if (!position) { summary.className = "empty"; summary.textContent = "No open position"; return; }
-  const mark = snapshot().candle?.close ?? position.entryPrice;
-  const pnl = (mark - position.entryPrice) * position.quantity * (position.side === "LONG" ? 1 : -1);
+  const accountState = account.snapshot();
+  const mark = accountState.markPrice ?? snapshot().candle?.close ?? position.entryPrice;
+  const pnl = accountState.unrealizedPnl;
   const sl = position.stopLossPrice === null ? "None" : money(position.stopLossPrice);
   const tp = position.takeProfitPrice === null ? "None" : money(position.takeProfitPrice);
   const liquidationPrice = account.snapshot().liquidationPrice;
@@ -231,12 +253,26 @@ function recordActivity(message: string, tone: ActivityItem["tone"] = "") {
   activity = activity.slice(0, 25);
   drawActivity();
 }
-function clearTradingSession() {
+function resetTradingState() {
   account = new PaperAccount();
   orders = [];
   activity = [];
   nextOrderId = 1;
   positionOpenedIndex = -1;
+}
+function clearTradingSession() {
+  sessionJournal.clear();
+  fundingCursor = 0;
+  resetTradingState();
+}
+function markCandleFor(candle: Candle): MarkPriceCandle | null {
+  return matchMarkCandle(candle, markCandlesByTime);
+}
+function markPriceForCandle(candle: Candle): number {
+  return markCandleFor(candle)?.close ?? candle.close;
+}
+function markPriceAtFundingEvent(timestamp: number, fallback: number): number {
+  return historicalMarkAt(timestamp, historicalMarkCandles, fallback);
 }
 function processPendingOrders(candle: Candle, index: number) {
   for (const order of orders) {
@@ -271,51 +307,97 @@ function processFundingEvents(candle: Candle) {
     fundingCursor += 1;
     const position = account.snapshot().position;
     if (!position) continue;
-    const markPrice = event.markPrice ?? candle.close;
+    const markPrice = event.markPrice ?? markPriceAtFundingEvent(event.fundingTime, markPriceForCandle(candle));
     const payment = account.applyFunding(event.fundingRate, markPrice);
     const flow = payment < 0 ? "paid" : "received";
     recordActivity(`FUNDING ${flow} ${money(Math.abs(payment))} · rate ${(event.fundingRate * 100).toFixed(4)}%`, payment < 0 ? "negative" : "positive");
   }
 }
-function resetFundingCursorForReplayIndex(index: number) {
-  const timestamp = index >= 0 ? candles[index]?.time ?? -Infinity : -Infinity;
-  const next = fundingEvents.findIndex((event) => event.fundingTime > timestamp);
-  fundingCursor = next < 0 ? fundingEvents.length : next;
+function processCandle(candle: Candle, index: number) {
+  // Funding settles before new entry fills, so a newly opened position cannot collect this timestamp's funding.
+  processFundingEvents(candle);
+  processPendingOrders(candle, index);
+  const position = account.snapshot().position;
+  if (position && index > positionOpenedIndex) {
+    const exit = resolveRiskExit(position, candle, index, positionOpenedIndex);
+    if (exit) {
+      account.close(exit.price);
+      positionOpenedIndex = -1;
+      recordActivity(exit.reason.replace("_", " ") + " " + position.side + " @ " + money(exit.price), exit.reason === "STOP_LOSS" ? "negative" : "positive");
+      el<HTMLElement>("notice").textContent = exit.reason.replace("_", " ") + " triggered at " + money(exit.price) + " under the documented OHLC fill model.";
+    }
+  }
+  const remainingPosition = account.snapshot().position;
+  if (remainingPosition && index > positionOpenedIndex) {
+    const liquidationCandle = markCandleFor(candle) ?? candle;
+    const liquidation = resolveLiquidationExit(
+      remainingPosition.side,
+      liquidationCandle,
+      index,
+      positionOpenedIndex,
+      account.snapshot().liquidationPrice,
+    );
+    if (liquidation) {
+      account.close(liquidation.price);
+      positionOpenedIndex = -1;
+      recordActivity("LIQUIDATION " + remainingPosition.side + " @ " + money(liquidation.price), "negative");
+      el<HTMLElement>("notice").textContent = "Paper position liquidated at " + money(liquidation.price) + " under the simplified maintenance-margin model.";
+    }
+  }
+  account.updateMark(markPriceForCandle(candle));
+}
+function applySessionAction(action: SessionAction) {
+  if (action.kind === "submit") {
+    const order: PaperOrder = {
+      ...action.order,
+      id: nextOrderId++,
+      createdIndex: action.index,
+      status: "PENDING",
+      filledPrice: null,
+    };
+    orders.push(order);
+    recordActivity("SUBMITTED #" + order.id + " " + order.side + " " + order.type.toUpperCase() + " " + order.quantity);
+    return;
+  }
+
+  if (action.kind === "close") {
+    const candle = action.index >= 0 ? candles[action.index] : null;
+    if (!candle || !account.snapshot().position) return;
+    const price = candle.close;
+    const before = account.snapshot().walletBalance;
+    const position = account.snapshot().position;
+    account.close(price);
+    positionOpenedIndex = -1;
+    const walletDelta = account.snapshot().walletBalance - before;
+    recordActivity("CLOSED position @ " + money(price) + " · wallet change " + money(walletDelta), walletDelta >= 0 ? "positive" : "negative");
+    return;
+  }
+
+  if (action.kind === "cancel-pending") {
+    const pending = orders.filter((order) => order.status === "PENDING");
+    for (const order of pending) {
+      order.status = "CANCELLED";
+      recordActivity("CANCELLED #" + order.id);
+    }
+    return;
+  }
+
+  resetTradingState();
+  if (action.index >= 0 && candles[action.index]) account.updateMark(markPriceForCandle(candles[action.index]));
+}
+function applyJournalActionsAtIndex(index: number) {
+  for (const action of sessionJournal.takeAt(index)) applySessionAction(action);
+}
+function recordUserAction(action: SessionAction) {
+  sessionJournal.append(action, snapshot().index);
+  applySessionAction(action);
 }
 function advanceOneBar() {
   const previous = snapshot().index;
   const state = replay.step();
   if (state.index >= 0 && state.index !== previous && state.candle) {
-    // Settle before this candle’s entry fills, so a newly opened position does not receive funding at that timestamp.
-    processFundingEvents(state.candle);
-    processPendingOrders(state.candle, state.index);
-    const position = account.snapshot().position;
-    if (position && state.index > positionOpenedIndex) {
-      const exit = resolveRiskExit(position, state.candle, state.index, positionOpenedIndex);
-      if (exit) {
-        account.close(exit.price);
-        positionOpenedIndex = -1;
-        recordActivity(`${exit.reason.replace("_", " ")} ${position.side} @ ${money(exit.price)}`, exit.reason === "STOP_LOSS" ? "negative" : "positive");
-        el<HTMLElement>("notice").textContent = `${exit.reason.replace("_", " ")} triggered at ${money(exit.price)} under the documented OHLC fill model.`;
-      }
-    }
-    const remainingPosition = account.snapshot().position;
-    if (remainingPosition && state.index > positionOpenedIndex) {
-      const liquidation = resolveLiquidationExit(
-        remainingPosition.side,
-        state.candle,
-        state.index,
-        positionOpenedIndex,
-        account.snapshot().liquidationPrice,
-      );
-      if (liquidation) {
-        account.close(liquidation.price);
-        positionOpenedIndex = -1;
-        recordActivity(`LIQUIDATION ${remainingPosition.side} @ ${money(liquidation.price)}`, "negative");
-        el<HTMLElement>("notice").textContent = `Paper position liquidated at ${money(liquidation.price)} under the simplified maintenance-margin model.`;
-      }
-    }
-    account.updateMark(state.candle.close);
+    processCandle(state.candle, state.index);
+    applyJournalActionsAtIndex(state.index);
   }
   drawChart();
   return state;
@@ -328,20 +410,41 @@ function replayStep() {
 }
 function seekReplay(index: number) {
   stopTimer();
+  if (!Number.isInteger(index) || index < -1 || index >= candles.length) {
+    throw new RangeError("Replay index is outside the loaded dataset");
+  }
+
+  // Rebuild from the first candle so fills, fees, funding, exits, and manual
+  // actions are replayed in the same order instead of leaking future state.
+  replay.seek(-1);
+  resetTradingState();
+  fundingCursor = 0;
+  sessionJournal.rewind();
+  applyJournalActionsAtIndex(-1);
+  for (let current = 0; current <= index; current += 1) {
+    replay.seek(current - 1);
+    const state = replay.step();
+    if (state.candle) {
+      processCandle(state.candle, current);
+      applyJournalActionsAtIndex(current);
+    }
+  }
   replay.seek(index);
-  // Event-journal reconstruction comes later. V1 clears trading history on
-  // seek so future orders and positions can never leak into earlier bars.
-  clearTradingSession();
-  resetFundingCursorForReplayIndex(index);
-  if (index >= 0) account.updateMark(candles[index].close);
   drawChart();
 }
-function setData(next: Candle[], message: string, funding: HistoricalFunding[] = []) {
+function setData(
+  next: Candle[],
+  message: string,
+  funding: HistoricalFunding[] = [],
+  marks: MarkPriceCandle[] = [],
+) {
   stopTimer();
   replay.load(next);
   candles = next;
   fundingEvents = [...funding].sort((a, b) => a.fundingTime - b.fundingTime);
   fundingCursor = 0;
+  historicalMarkCandles = [...marks].sort((a, b) => a.time - b.time);
+  markCandlesByTime = new Map(historicalMarkCandles.map((mark) => [mark.time, mark]));
   marketDataSymbol = el<HTMLSelectElement>("symbol").value;
   marketDataInterval = el<HTMLSelectElement>("timeframe").value;
   clearTradingSession();
@@ -369,7 +472,7 @@ function parseCsv(text: string): Candle[] {
 async function fetchBinance() {
   const button = el<HTMLButtonElement>("load-binance");
   button.disabled = true;
-  el<HTMLElement>("notice").textContent = "Fetching public Binance USDⓈ-M futures candles and funding history…";
+  el<HTMLElement>("notice").textContent = "Fetching Binance Futures trade candles, historical funding, and mark-price candles…";
   try {
     const interval = el<HTMLSelectElement>("timeframe").value;
     const pair = el<HTMLSelectElement>("symbol").value;
@@ -416,8 +519,49 @@ async function fetchBinance() {
       fundingMessage = " Funding history unavailable; trades will not include funding for this dataset.";
     }
 
+    let historicalMarks: MarkPriceCandle[] = [];
+    let markMessage = "";
+    try {
+      const markUrl = new URL("https://fapi.binance.com/fapi/v1/markPriceKlines");
+      markUrl.search = new URLSearchParams({
+        symbol: pair,
+        interval,
+        startTime: String(next[0].time),
+        endTime: String(next[next.length - 1].time + intervalMs - 1),
+        limit: "1000",
+      }).toString();
+      const markResponse = await fetch(markUrl, { headers: { accept: "application/json" } });
+      if (!markResponse.ok) throw new Error("Mark-price endpoint returned HTTP " + markResponse.status);
+      const markRaw: unknown = await markResponse.json();
+      if (!Array.isArray(markRaw)) throw new Error("Unexpected mark-price response");
+      historicalMarks = (markRaw as unknown[][]).map((row) => ({
+        time: Number(row[0]),
+        open: Number(row[1]),
+        high: Number(row[2]),
+        low: Number(row[3]),
+        close: Number(row[4]),
+      })).filter((mark) =>
+        Number.isFinite(mark.time) &&
+        [mark.open, mark.high, mark.low, mark.close].every((price) => Number.isFinite(price) && price > 0) &&
+        mark.high >= Math.max(mark.open, mark.close, mark.low) &&
+        mark.low <= Math.min(mark.open, mark.close, mark.high)
+      ).sort((a, b) => a.time - b.time);
+      const availableTimes = new Set(historicalMarks.map((mark) => mark.time));
+      const aligned = next.filter((candle) => availableTimes.has(candle.time)).length;
+      markMessage = " " + aligned + "/" + next.length + " candle-aligned mark-price candles loaded.";
+      if (aligned < next.length) markMessage += " Missing mark candles will use trade-price fallback.";
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      markMessage = " Historical mark-price candles unavailable (" + reason + "); mark-to-market and liquidation will fall back to trade candles.";
+    }
+
     symbol = pair;
-    setData(next, `Loaded ${next.length} public Binance Futures ${symbol} candles.${fundingMessage} Replay is paused at the beginning.`, historicalFunding);
+    setData(
+      next,
+      "Loaded " + next.length + " public Binance Futures " + symbol + " candles." + fundingMessage + markMessage + " Replay is paused at the beginning.",
+      historicalFunding,
+      historicalMarks,
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     el<HTMLElement>("notice").textContent = `Unable to fetch Binance data: ${message}. You can import a CSV instead.`;
@@ -511,8 +655,7 @@ el<HTMLButtonElement>("submit").addEventListener("click", () => {
       throw new Error("Take-profit must be above entry for Long and below entry for Short");
     }
 
-    const order: PaperOrder = {
-      id: nextOrderId++,
+    const order: OrderIntent = {
       symbol,
       side,
       type: orderType,
@@ -521,12 +664,8 @@ el<HTMLButtonElement>("submit").addEventListener("click", () => {
       limitPrice: orderType === "limit" ? limitPrice : null,
       stopLossPrice,
       takeProfitPrice,
-      createdIndex: state.index,
-      status: "PENDING",
-      filledPrice: null,
     };
-    orders.push(order);
-    recordActivity(`SUBMITTED #${order.id} ${order.side} ${order.type.toUpperCase()} ${quantity}`);
+    recordUserAction({ kind: "submit", index: state.index, order });
     el<HTMLElement>("notice").textContent = order.type === "market"
       ? "Paper market order queued. It will fill at the next eligible candle open."
       : "Paper limit order queued. It can fill only on a future candle that reaches the limit; OHLC fills are approximate.";
@@ -537,32 +676,29 @@ el<HTMLButtonElement>("submit").addEventListener("click", () => {
 });
 el<HTMLButtonElement>("close").addEventListener("click", () => {
   try {
-    const price = snapshot().candle?.close;
-    if (!price) throw new Error("No replay price available");
-    const before = account.snapshot().walletBalance;
-    account.close(price);
-    positionOpenedIndex = -1;
-    const walletDelta = account.snapshot().walletBalance - before;
-    recordActivity(`CLOSED position @ ${money(price)} · wallet change ${money(walletDelta)}`, walletDelta >= 0 ? "positive" : "negative");
-    el<HTMLElement>("notice").textContent = `Paper position closed at ${money(price)}.`;
+    if (!snapshot().candle) throw new Error("No replay price available");
+    if (!account.snapshot().position) throw new Error("No open position");
+    recordUserAction({ kind: "close", index: snapshot().index });
+    const price = candles[snapshot().index].close;
+    el<HTMLElement>("notice").textContent = "Paper position closed at " + money(price) + ".";
     drawChart();
   } catch (error) {
     el<HTMLElement>("notice").textContent = error instanceof Error ? error.message : String(error);
   }
 });
 el<HTMLButtonElement>("reset").addEventListener("click", () => {
-  clearTradingSession();
+  recordUserAction({ kind: "reset", index: snapshot().index });
   drawChart();
-  el<HTMLElement>("notice").textContent = "Paper account and order history reset. Replay position was not changed.";
+  el<HTMLElement>("notice").textContent = "Paper account and order history reset at the current replay position.";
 });
 el<HTMLButtonElement>("cancel-orders").addEventListener("click", () => {
   const pending = orders.filter((order) => order.status === "PENDING");
-  for (const order of pending) {
-    order.status = "CANCELLED";
-    recordActivity(`CANCELLED #${order.id}`);
+  if (pending.length === 0) {
+    el<HTMLElement>("notice").textContent = "No pending orders to cancel.";
+    return;
   }
-  if (pending.length === 0) el<HTMLElement>("notice").textContent = "No pending orders to cancel.";
-  else el<HTMLElement>("notice").textContent = `Cancelled ${pending.length} pending order(s).`;
+  recordUserAction({ kind: "cancel-pending", index: snapshot().index });
+  el<HTMLElement>("notice").textContent = "Cancelled pending order(s).";
   drawChart();
 });
 el<HTMLButtonElement>("load-binance").addEventListener("click", () => void fetchBinance());
