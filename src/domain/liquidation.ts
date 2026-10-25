@@ -8,9 +8,9 @@ export interface LiquidationExit {
 /**
  * OHLC approximation of a liquidation trigger.
  *
- * Uses the provided liquidation threshold as if the candle's high/low were
- * mark-price extrema. Gaps through the threshold fill at the candle open if
- * that is worse. This is not Binance-tier-accurate liquidation simulation.
+ * The caller should pass mark-price OHLC when available; trade-candle OHLC is
+ * only a fallback proxy. Gaps through the threshold fill at the candle open
+ * if that is worse. Fixed maintenance-margin tiers remain approximate.
  */
 export function resolveLiquidationExit(
   side: "LONG" | "SHORT",
