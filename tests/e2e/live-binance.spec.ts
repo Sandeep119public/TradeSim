@@ -10,6 +10,11 @@ const INTERVAL_MS: Record<string, number> = {
 test("loads the latest 1,000 closed candles from public Binance Futures", async ({ page }) => {
   const symbol = process.env.TRADESIM_SMOKE_SYMBOL ?? "BTCUSDT";
   const interval = process.env.TRADESIM_SMOKE_INTERVAL ?? "1m";
+  const browserErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") browserErrors.push("console: " + message.text());
+  });
+  page.on("pageerror", (error) => browserErrors.push("page: " + error.message));
   const intervalMs = INTERVAL_MS[interval];
   if (!intervalMs) throw new Error("Unsupported smoke-test interval: " + interval);
 
@@ -67,4 +72,6 @@ test("loads the latest 1,000 closed candles from public Binance Futures", async 
 
   await page.locator("#step").click();
   await expect(page.locator("#ohlc")).toHaveText(/^O [\d.]+  H [\d.]+  L [\d.]+  C [\d.]+$/);
+  expect(browserErrors).toEqual([]);
+  console.log(`Live Binance validated: symbol=${symbol}, interval=${interval}; ${initialNotice}; browserErrors=${browserErrors.length}`);
 });
