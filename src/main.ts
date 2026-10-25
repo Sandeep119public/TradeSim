@@ -270,12 +270,16 @@ async function fetchBinance() {
   const intervalSelect = el<HTMLSelectElement>("timeframe");
   const startInput = el<HTMLInputElement>("range-start");
   const endInput = el<HTMLInputElement>("range-end");
-  const wasDisabled = [symbolSelect.disabled, intervalSelect.disabled, startInput.disabled, endInput.disabled];
+  const csvInput = el<HTMLInputElement>("csv");
+  const importButton = el<HTMLButtonElement>("import-csv");
+  const wasDisabled = [symbolSelect.disabled, intervalSelect.disabled, startInput.disabled, endInput.disabled, csvInput.disabled, importButton.disabled];
   button.disabled = true;
   symbolSelect.disabled = true;
   intervalSelect.disabled = true;
   startInput.disabled = true;
   endInput.disabled = true;
+  csvInput.disabled = true;
+  importButton.disabled = true;
   notice.textContent = "Preparing historical Binance Futures data request…";
   try {
     const interval = el<HTMLSelectElement>("timeframe").value as SupportedInterval;
@@ -336,6 +340,8 @@ async function fetchBinance() {
     intervalSelect.disabled = wasDisabled[1];
     startInput.disabled = wasDisabled[2];
     endInput.disabled = wasDisabled[3];
+    csvInput.disabled = wasDisabled[4];
+    importButton.disabled = wasDisabled[5];
   }
 }
 el<HTMLButtonElement>("play").addEventListener("click", () => {

@@ -118,6 +118,8 @@ test("paginates a 1,001-candle range and locks selection controls while fetching
   await expect(page.locator("#timeframe")).toBeDisabled();
   await expect(page.locator("#range-start")).toBeDisabled();
   await expect(page.locator("#range-end")).toBeDisabled();
+  await expect(page.locator("#csv")).toBeDisabled();
+  await expect(page.locator("#import-csv")).toBeDisabled();
 
   await expect(page.locator("#notice")).toContainText(
     "Loaded 1,001 public Binance Futures ETHUSDT candles.",
@@ -130,6 +132,8 @@ test("paginates a 1,001-candle range and locks selection controls while fetching
   await expect(page.locator("#timeframe")).toBeEnabled();
   await expect(page.locator("#range-start")).toBeEnabled();
   await expect(page.locator("#range-end")).toBeEnabled();
+  await expect(page.locator("#csv")).toBeEnabled();
+  await expect(page.locator("#import-csv")).toBeEnabled();
 
   expect(requests.get("/fapi/v1/klines")).toBe(2);
   expect(requests.get("/fapi/v1/markPriceKlines")).toBe(2);
