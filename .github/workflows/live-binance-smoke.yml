@@ -55,8 +55,6 @@ jobs:
         run: npm audit --audit-level=high
       - name: Build and type-check
         run: npm run build
-      - name: Install Playwright Chromium and system dependencies
-        run: npx playwright install --with-deps chromium
       - name: Probe Binance Futures API reachability
         id: binance_probe
         shell: bash
@@ -72,6 +70,9 @@ jobs:
             echo "::warning::Skipping browser smoke test because this runner cannot access Binance Futures API (HTTP $status)."
             if [ -f /tmp/binance-probe.json ]; then head -c 500 /tmp/binance-probe.json; echo; fi
           fi
+      - name: Install Playwright Chromium and system dependencies
+        if: steps.binance_probe.outputs.available == 'true'
+        run: npx playwright install --with-deps chromium
       - name: Run live Binance browser smoke test
         if: steps.binance_probe.outputs.available == 'true'
         env:
@@ -79,7 +80,7 @@ jobs:
           TRADESIM_SMOKE_INTERVAL: ${{ inputs.interval || '1m' }}
         run: npm run test:e2e:live
       - name: Upload Playwright traces on failure
-        if: failure()
+        if: failure() && steps.binance_probe.outputs.available == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: live-binance-smoke-traces
