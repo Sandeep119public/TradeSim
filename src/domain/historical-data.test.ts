@@ -241,7 +241,7 @@ describe("loadBinanceHistoricalData", () => {
   it("accepts a full-size range when the entered timestamps are off candle boundaries", async () => {
     const interval = 60_000;
     const startTime = interval - 1;
-    const endTime = 100_000 * interval - 1;
+    const endTime = 100_001 * interval - 1;
     const resultRows = [
       [interval, "100", "105", "95", "102", "10"],
       [2 * interval, "102", "108", "101", "107", "12"],
