@@ -3,6 +3,7 @@ import { createChart, CandlestickSeries, type IChartApi, type ISeriesApi, type T
 import { PaperAccount, type Side } from "./domain/paper-account";
 import { ReplayEngine } from "./domain/replay";
 import { resolveFillPrice } from "./domain/matching";
+import { resolveRiskExit } from "./domain/risk-exits";
 import type { Candle } from "./domain/market";
 
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -29,6 +30,8 @@ interface PaperOrder {
   quantity: number;
   leverage: number;
   limitPrice: number | null;
+  stopLossPrice: number | null;
+  takeProfitPrice: number | null;
   createdIndex: number;
   status: OrderStatus;
   filledPrice: number | null;
@@ -42,6 +45,7 @@ interface ActivityItem {
 let orders: PaperOrder[] = [];
 let activity: ActivityItem[] = [];
 let nextOrderId = 1;
+let positionOpenedIndex = -1;
 
 const demoStart = Date.UTC(2026, 0, 15, 10, 0);
 const demo: Candle[] = Array.from({ length: 120 }, (_, i) => {
@@ -90,6 +94,7 @@ app.innerHTML = `
         <label>Leverage <strong id="lev-value">10×</strong><input id="leverage" type="range" min="1" max="50" value="10"/></label>
         <div class="preview"><div><span>Estimated notional</span><strong id="notional">$0.00</strong></div><div><span>Initial margin</span><strong id="initial-margin">$0.00</strong></div><div><span>Estimated entry fee</span><strong id="entry-fee">$0.00</strong></div></div>
         <div id="limit-wrap" hidden><label>Limit price<input id="limit-price" type="number" min="0" step="any"/></label></div>
+        <div class="risk-grid"><label>Attached stop-loss<input id="sl-price" type="number" min="0" step="any" placeholder="Optional"/></label><label>Attached take-profit<input id="tp-price" type="number" min="0" step="any" placeholder="Optional"/></label></div>
         <button id="submit" class="submit-long" type="button">Open Long</button>
         <div class="position-box"><div class="section-title"><h3>Open position</h3><button id="close" class="ghost" disabled type="button">Close</button></div><div id="position-summary" class="empty">No open position</div></div>
         <div class="position-box"><div class="section-title"><h3>Order &amp; fill history</h3><button id="cancel-orders" class="ghost" type="button">Cancel pending</button></div><div id="activity-list" class="activity-list empty">No order activity yet</div></div>
@@ -184,8 +189,10 @@ function drawPosition() {
   if (!position) { summary.className = "empty"; summary.textContent = "No open position"; return; }
   const mark = snapshot().candle?.close ?? position.entryPrice;
   const pnl = (mark - position.entryPrice) * position.quantity * (position.side === "LONG" ? 1 : -1);
+  const sl = position.stopLossPrice === null ? "None" : money(position.stopLossPrice);
+  const tp = position.takeProfitPrice === null ? "None" : money(position.takeProfitPrice);
   summary.className = "";
-  summary.innerHTML = `<div><b>${position.symbol} · ${position.side}</b></div><div>Size: ${position.quantity} · Leverage: ${position.leverage}×</div><div>Entry: ${money(position.entryPrice)} · Mark: ${money(mark)}</div><div class="${pnl >= 0 ? "positive" : "negative"}">Unrealized P&amp;L: ${money(pnl)}</div>`;
+  summary.innerHTML = `<div><b>${position.symbol} · ${position.side}</b></div><div>Size: ${position.quantity} · Leverage: ${position.leverage}×</div><div>Entry: ${money(position.entryPrice)} · Mark: ${money(mark)}</div><div>SL: ${sl} · TP: ${tp}</div><div class="${pnl >= 0 ? "positive" : "negative"}">Unrealized P&amp;L: ${money(pnl)}</div>`;
 }
 function drawActivity() {
   const list = el<HTMLDivElement>("activity-list");
@@ -218,6 +225,7 @@ function clearTradingSession() {
   orders = [];
   activity = [];
   nextOrderId = 1;
+  positionOpenedIndex = -1;
 }
 function processPendingOrders(candle: Candle, index: number) {
   for (const order of orders) {
@@ -232,7 +240,10 @@ function processPendingOrders(candle: Candle, index: number) {
         quantity: order.quantity,
         price: fillPrice,
         leverage: order.leverage,
+        stopLossPrice: order.stopLossPrice,
+        takeProfitPrice: order.takeProfitPrice,
       });
+      positionOpenedIndex = index;
       order.status = "FILLED";
       order.filledPrice = fillPrice;
       recordActivity(`FILLED #${order.id} ${order.side} ${order.quantity} @ ${money(fillPrice)}`, "positive");
@@ -248,6 +259,16 @@ function advanceOneBar() {
   const state = replay.step();
   if (state.index >= 0 && state.index !== previous && state.candle) {
     processPendingOrders(state.candle, state.index);
+    const position = account.snapshot().position;
+    if (position && state.index > positionOpenedIndex) {
+      const exit = resolveRiskExit(position, state.candle, state.index, positionOpenedIndex);
+      if (exit) {
+        account.close(exit.price);
+        positionOpenedIndex = -1;
+        recordActivity(`${exit.reason.replace("_", " ")} ${position.side} @ ${money(exit.price)}`, exit.reason === "STOP_LOSS" ? "negative" : "positive");
+        el<HTMLElement>("notice").textContent = `${exit.reason.replace("_", " ")} triggered at ${money(exit.price)} under the documented OHLC fill model.`;
+      }
+    }
     account.updateMark(state.candle.close);
   }
   drawChart();
@@ -399,6 +420,19 @@ el<HTMLButtonElement>("submit").addEventListener("click", () => {
     if (orderType === "limit" && (limitPrice === null || !Number.isFinite(limitPrice) || limitPrice <= 0)) {
       throw new Error("Enter a valid limit price");
     }
+    const rawSl = el<HTMLInputElement>("sl-price").value.trim();
+    const rawTp = el<HTMLInputElement>("tp-price").value.trim();
+    const stopLossPrice = rawSl === "" ? null : Number(rawSl);
+    const takeProfitPrice = rawTp === "" ? null : Number(rawTp);
+    if (stopLossPrice !== null && (!Number.isFinite(stopLossPrice) || stopLossPrice <= 0)) throw new Error("Stop-loss must be a positive price");
+    if (takeProfitPrice !== null && (!Number.isFinite(takeProfitPrice) || takeProfitPrice <= 0)) throw new Error("Take-profit must be a positive price");
+    const reference = orderType === "limit" && limitPrice !== null ? limitPrice : state.candle.close;
+    if (stopLossPrice !== null && (side === "LONG" ? stopLossPrice >= reference : stopLossPrice <= reference)) {
+      throw new Error("Stop-loss must be below entry for Long and above entry for Short");
+    }
+    if (takeProfitPrice !== null && (side === "LONG" ? takeProfitPrice <= reference : takeProfitPrice >= reference)) {
+      throw new Error("Take-profit must be above entry for Long and below entry for Short");
+    }
 
     const order: PaperOrder = {
       id: nextOrderId++,
@@ -408,6 +442,8 @@ el<HTMLButtonElement>("submit").addEventListener("click", () => {
       quantity,
       leverage,
       limitPrice: orderType === "limit" ? limitPrice : null,
+      stopLossPrice,
+      takeProfitPrice,
       createdIndex: state.index,
       status: "PENDING",
       filledPrice: null,
@@ -428,6 +464,7 @@ el<HTMLButtonElement>("close").addEventListener("click", () => {
     if (!price) throw new Error("No replay price available");
     const before = account.snapshot().walletBalance;
     account.close(price);
+    positionOpenedIndex = -1;
     const walletDelta = account.snapshot().walletBalance - before;
     recordActivity(`CLOSED position @ ${money(price)} · wallet change ${money(walletDelta)}`, walletDelta >= 0 ? "positive" : "negative");
     el<HTMLElement>("notice").textContent = `Paper position closed at ${money(price)}.`;
