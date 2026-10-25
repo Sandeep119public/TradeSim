@@ -27,7 +27,7 @@ describe("PaperAccount", () => {
     const state = account.close(110);
     expect(state.position).toBeNull();
     expect(state.realizedPnl).toBeCloseTo(9.79);
-    expect(state.walletBalance).toBeCloseTo(1_008.79);
+    expect(state.walletBalance).toBeCloseTo(1_009.79);
     expect(state.feesPaid).toBeCloseTo(0.21);
   });
 
