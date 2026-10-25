@@ -365,7 +365,6 @@ function applySessionAction(action: SessionAction) {
     if (!candle || !account.snapshot().position) return;
     const price = candle.close;
     const before = account.snapshot().walletBalance;
-    const position = account.snapshot().position;
     account.close(price);
     positionOpenedIndex = -1;
     const walletDelta = account.snapshot().walletBalance - before;
