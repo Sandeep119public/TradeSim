@@ -4,6 +4,7 @@ import { PaperAccount, type Side } from "./domain/paper-account";
 import { ReplayEngine } from "./domain/replay";
 import { resolveFillPrice } from "./domain/matching";
 import { resolveRiskExit } from "./domain/risk-exits";
+import { resolveLiquidationExit } from "./domain/liquidation";
 import type { Candle } from "./domain/market";
 
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -88,7 +89,7 @@ app.innerHTML = `
         <p id="notice" class="notice" role="status">Demo dataset loaded. Fetch Binance futures candles or import a CSV.</p>
       </div>
       <section class="section-card">
-        <div class="section-title"><div><span class="eyebrow">ACCOUNT</span><h2>Paper account</h2></div><span class="paper-tag">NO REAL ORDERS</span></div>
+        <div class="section-title"><div><span class="eyebrow">ACCOUNT</span><h2>Paper account</h2></div><span class="paper-tag">NO REAL ORDERS</span></div><p>Liquidation estimate uses a simplified 0.5% maintenance rate and replay OHLC prices, not Binance mark-price liquidation brackets.</p>
         <div class="stats-grid"><div><span>Wallet balance</span><strong id="wallet">$10,000.00</strong></div><div><span>Equity</span><strong id="equity">$10,000.00</strong></div><div><span>Unrealized P&amp;L</span><strong id="unrealized">$0.00</strong></div><div><span>Realized P&amp;L</span><strong id="realized">$0.00</strong></div><div><span>Used margin</span><strong id="margin">$0.00</strong></div><div><span>Available margin</span><strong id="available">$10,000.00</strong></div><div><span>Net funding</span><strong id="funding">$0.00</strong></div></div>
       </section>
     </section>
@@ -199,8 +200,10 @@ function drawPosition() {
   const pnl = (mark - position.entryPrice) * position.quantity * (position.side === "LONG" ? 1 : -1);
   const sl = position.stopLossPrice === null ? "None" : money(position.stopLossPrice);
   const tp = position.takeProfitPrice === null ? "None" : money(position.takeProfitPrice);
+  const liquidationPrice = account.snapshot().liquidationPrice;
+  const liq = liquidationPrice === null ? "Not estimated" : money(liquidationPrice);
   summary.className = "";
-  summary.innerHTML = `<div><b>${position.symbol} · ${position.side}</b></div><div>Size: ${position.quantity} · Leverage: ${position.leverage}×</div><div>Entry: ${money(position.entryPrice)} · Mark: ${money(mark)}</div><div>SL: ${sl} · TP: ${tp}</div><div class="${pnl >= 0 ? "positive" : "negative"}">Unrealized P&amp;L: ${money(pnl)}</div>`;
+  summary.innerHTML = `<div><b>${position.symbol} · ${position.side}</b></div><div>Size: ${position.quantity} · Leverage: ${position.leverage}×</div><div>Entry: ${money(position.entryPrice)} · Mark: ${money(mark)}</div><div>SL: ${sl} · TP: ${tp}</div><div>Estimated liquidation: ${liq}</div><div class="${pnl >= 0 ? "positive" : "negative"}">Unrealized P&amp;L: ${money(pnl)}</div>`;
 }
 function drawActivity() {
   const list = el<HTMLDivElement>("activity-list");
