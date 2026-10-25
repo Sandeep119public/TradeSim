@@ -35,8 +35,15 @@ npm run dev
 npm test
 npm run build
 npx playwright install chromium  # one-time browser install for local E2E runs
-npm run test:e2e
+npm run test:e2e                  # deterministic tests with mocked Binance responses
+npm run test:e2e:live             # optional live Binance smoke test; requires network access
 ```
+
+## Live data smoke test
+
+The live smoke test loads the latest 1,000 fully closed candles in Chromium, checks that the returned dataset matches the selected symbol/timeframe, confirms the last candle is closed, and steps the replay once. It only uses public Binance Futures market-data endpoints and never places an order.
+
+To run it in GitHub Actions, open the **CI** workflow, choose **Run workflow**, select the `feature/historical-data-range` branch, and dispatch it. The live-network step runs only for manual dispatches; normal pull-request CI stays deterministic and uses mocked exchange responses. Rate limits, exchange availability, or network-region restrictions can affect the live smoke test.
 
 ## Known limitations
 
