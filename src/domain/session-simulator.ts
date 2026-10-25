@@ -332,8 +332,8 @@ export class ReplaySession {
     const sorted = events.map((event) => ({ ...event })).sort((a, b) => a.fundingTime - b.fundingTime);
     const result: HistoricalFunding[] = [];
     for (const event of sorted) {
-      if (!Number.isFinite(event.fundingTime) || event.fundingTime < 0) {
-        throw new RangeError("Funding timestamp must be finite and non-negative");
+      if (!Number.isSafeInteger(event.fundingTime) || event.fundingTime < 0) {
+        throw new RangeError("Funding timestamp must be a safe non-negative integer");
       }
       if (!Number.isFinite(event.fundingRate)) throw new RangeError("Funding rate must be finite");
       if (event.markPrice !== null && !this.validPrice(event.markPrice)) event.markPrice = null;
@@ -354,8 +354,8 @@ export class ReplaySession {
     const sorted = candles.map((candle) => ({ ...candle })).sort((a, b) => a.time - b.time);
     let previousTime = -1;
     for (const candle of sorted) {
-      if (!Number.isFinite(candle.time) || candle.time < 0 || candle.time <= previousTime) {
-        throw new RangeError("Mark-price candle timestamps must be finite, non-negative, and unique");
+      if (!Number.isSafeInteger(candle.time) || candle.time < 0 || candle.time <= previousTime) {
+        throw new RangeError("Mark-price candle timestamps must be safe non-negative integers and unique");
       }
       if (![candle.open, candle.high, candle.low, candle.close].every((price) => Number.isFinite(price) && price > 0)) {
         throw new RangeError("Mark-price candles must contain finite positive prices");

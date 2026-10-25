@@ -452,8 +452,12 @@ describe("ReplaySession input integrity", () => {
 
   it("rejects malformed funding timestamps and rates at construction", () => {
     const invalidTime = { fundingTime: Number.NaN, fundingRate: 0.01, markPrice: 100 };
+    const fractionalTime = { fundingTime: start + 0.5, fundingRate: 0.01, markPrice: 100 };
+    const unsafeTime = { fundingTime: Number.MAX_SAFE_INTEGER + 1, fundingRate: 0.01, markPrice: 100 };
     const invalidRate = { fundingTime: start, fundingRate: Number.POSITIVE_INFINITY, markPrice: 100 };
     expect(() => new ReplaySession([candle(0)], [invalidTime], [], { candleIntervalMs: intervalMs })).toThrow(/Funding timestamp/);
+    expect(() => new ReplaySession([candle(0)], [fractionalTime], [], { candleIntervalMs: intervalMs })).toThrow(/Funding timestamp/);
+    expect(() => new ReplaySession([candle(0)], [unsafeTime], [], { candleIntervalMs: intervalMs })).toThrow(/Funding timestamp/);
     expect(() => new ReplaySession([candle(0)], [invalidRate], [], { candleIntervalMs: intervalMs })).toThrow(/Funding rate/);
     expect(() => new ReplaySession([candle(0)], [
       { fundingTime: start, fundingRate: 0.01, markPrice: 100 },
@@ -464,6 +468,8 @@ describe("ReplaySession input integrity", () => {
   it("rejects duplicate or malformed mark candles before replay starts", () => {
     const mark: MarkPriceCandle = { time: start, open: 100, high: 105, low: 95, close: 101 };
     expect(() => new ReplaySession([candle(0)], [], [mark, { ...mark }], { candleIntervalMs: intervalMs })).toThrow(/timestamps/);
+    expect(() => new ReplaySession([candle(0)], [], [{ ...mark, time: start + 0.5 }], { candleIntervalMs: intervalMs })).toThrow(/timestamps/);
+    expect(() => new ReplaySession([candle(0)], [], [{ ...mark, time: Number.MAX_SAFE_INTEGER + 1 }], { candleIntervalMs: intervalMs })).toThrow(/timestamps/);
     expect(() => new ReplaySession([candle(0)], [], [{ ...mark, high: 90 }], { candleIntervalMs: intervalMs })).toThrow(/OHLC/);
   });
 
