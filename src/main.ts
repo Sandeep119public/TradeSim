@@ -299,6 +299,22 @@ function advanceOneBar() {
         el<HTMLElement>("notice").textContent = `${exit.reason.replace("_", " ")} triggered at ${money(exit.price)} under the documented OHLC fill model.`;
       }
     }
+    const remainingPosition = account.snapshot().position;
+    if (remainingPosition && state.index > positionOpenedIndex) {
+      const liquidation = resolveLiquidationExit(
+        remainingPosition.side,
+        state.candle,
+        state.index,
+        positionOpenedIndex,
+        account.snapshot().liquidationPrice,
+      );
+      if (liquidation) {
+        account.close(liquidation.price);
+        positionOpenedIndex = -1;
+        recordActivity(`LIQUIDATION ${remainingPosition.side} @ ${money(liquidation.price)}`, "negative");
+        el<HTMLElement>("notice").textContent = `Paper position liquidated at ${money(liquidation.price)} under the simplified maintenance-margin model.`;
+      }
+    }
     account.updateMark(state.candle.close);
   }
   drawChart();
