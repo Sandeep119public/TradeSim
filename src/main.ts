@@ -272,7 +272,8 @@ function markPriceForCandle(candle: Candle): number {
   return markCandleFor(candle)?.close ?? candle.close;
 }
 function markPriceAtFundingEvent(timestamp: number, fallback: number): number {
-  return historicalMarkAt(timestamp, historicalMarkCandles, fallback);
+  const intervalMs = marketDataInterval === "1m" ? 60_000 : marketDataInterval === "5m" ? 300_000 : marketDataInterval === "15m" ? 900_000 : 3_600_000;
+  return historicalMarkAt(timestamp, historicalMarkCandles, fallback, intervalMs);
 }
 function processPendingOrders(candle: Candle, index: number) {
   for (const order of orders) {
