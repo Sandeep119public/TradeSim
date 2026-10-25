@@ -18,7 +18,7 @@ h1{font-size:25px;letter-spacing:-.04em;margin:6px 0}h1 span{font-size:10px;lett
 p{color:#8796ad;font-size:12px;margin:7px 0}
 label{display:flex;flex-direction:column;gap:7px;font-size:11px;color:#94a3b8;min-width:0}
 select,input{min-width:0;width:100%;background:#101a2a;color:#e5eaf4;border:1px solid #29364b;border-radius:8px;padding:10px;font-size:12px;outline:none}
-select:focus,input:focus{border-color:#7ba83f}.market-controls label{width:135px}
+select:focus,input:focus{border-color:#7ba83f}.market-controls label{width:135px}.data-range-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 12px;padding:12px 14px;border:1px solid #202b3c;background:#0d1522;border-radius:10px}.data-range-controls p{grid-column:1/-1;margin:0}.data-range-controls input{font-family:"DM Mono",monospace}
 .chart-card,.section-card{border:1px solid #202b3c;background:#0d1522;border-radius:13px;padding:16px}
 .chart-meta,.section-title,.timeline-labels{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .chart-meta{font-size:10px;letter-spacing:.12em;color:#8c9bb1}#ohlc{font-family:"DM Mono",monospace;letter-spacing:0}
