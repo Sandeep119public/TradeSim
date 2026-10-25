@@ -57,7 +57,23 @@ jobs:
         run: npm run build
       - name: Install Playwright Chromium and system dependencies
         run: npx playwright install --with-deps chromium
+      - name: Probe Binance Futures API reachability
+        id: binance_probe
+        shell: bash
+        run: |
+          status="$(curl -sS --max-time 10 -o /tmp/binance-probe.json -w '%{http_code}' 'https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=1m&limit=1' || true)"
+          echo "Binance Futures klines preflight HTTP status: $status"
+          if [ "$status" = "200" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            head -c 300 /tmp/binance-probe.json
+            echo
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Skipping browser smoke test because this runner cannot access Binance Futures API (HTTP $status)."
+            if [ -f /tmp/binance-probe.json ]; then head -c 500 /tmp/binance-probe.json; echo; fi
+          fi
       - name: Run live Binance browser smoke test
+        if: steps.binance_probe.outputs.available == 'true'
         env:
           TRADESIM_SMOKE_SYMBOL: ${{ inputs.symbol || 'BTCUSDT' }}
           TRADESIM_SMOKE_INTERVAL: ${{ inputs.interval || '1m' }}
