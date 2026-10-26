@@ -1,0 +1,89 @@
+name: Live Binance Smoke Test
+
+on:
+  push:
+    branches: [feature/historical-data-range]
+    paths:
+      - ".github/workflows/live-binance-smoke.yml"
+      - "src/domain/historical-data.ts"
+      - "tests/e2e/live-binance.spec.ts"
+      - "playwright.live.config.ts"
+      - "package.json"
+  workflow_dispatch:
+    inputs:
+      symbol:
+        description: "Perpetual market to smoke-test"
+        type: choice
+        required: true
+        default: BTCUSDT
+        options:
+          - BTCUSDT
+          - SOLUSDT
+          - ETHUSDT
+      interval:
+        description: "Candle interval"
+        type: choice
+        required: true
+        default: 1m
+        options:
+          - 1m
+          - 5m
+          - 15m
+          - 1h
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-binance-smoke-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+      - name: Build and type-check
+        run: npm run build
+      - name: Probe Binance Futures API reachability
+        id: binance_probe
+        shell: bash
+        run: |
+          status="$(curl -sS --max-time 10 -o /tmp/binance-probe.json -w '%{http_code}' 'https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=1m&limit=1' || true)"
+          echo "Binance Futures klines preflight HTTP status: $status"
+          if [ "$status" = "200" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            head -c 300 /tmp/binance-probe.json
+            echo
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Skipping browser smoke test because this runner cannot access Binance Futures API (HTTP $status)."
+            if [ -f /tmp/binance-probe.json ]; then head -c 500 /tmp/binance-probe.json; echo; fi
+          fi
+      - name: Install Playwright Chromium and system dependencies
+        if: steps.binance_probe.outputs.available == 'true'
+        run: npx playwright install --with-deps chromium
+      - name: Run live Binance browser smoke test
+        if: steps.binance_probe.outputs.available == 'true'
+        env:
+          TRADESIM_SMOKE_SYMBOL: ${{ inputs.symbol || 'BTCUSDT' }}
+          TRADESIM_SMOKE_INTERVAL: ${{ inputs.interval || '1m' }}
+        run: npm run test:e2e:live
+      - name: Upload Playwright traces on failure
+        if: failure() && steps.binance_probe.outputs.available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-binance-smoke-traces
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
