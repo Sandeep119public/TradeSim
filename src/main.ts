@@ -2,7 +2,15 @@ import "./style.css";
 import { createChart, CandlestickSeries, type IChartApi, type ISeriesApi, type Time } from "lightweight-charts";
 import type { Side } from "./domain/paper-account";
 import { ReplaySession, type HistoricalFunding, type OrderIntent } from "./domain/session-simulator";
-import { loadBinanceHistoricalData, intervalToMs, MAX_REPLAY_CANDLES, type SupportedInterval } from "./domain/historical-data";
+import {
+  HistoricalLoadCancelledError,
+  HistoricalLoadTimeoutError,
+  HistoricalRequestTimeoutError,
+  loadBinanceHistoricalData,
+  intervalToMs,
+  MAX_REPLAY_CANDLES,
+  type SupportedInterval,
+} from "./domain/historical-data";
 import type { MarkPriceCandle } from "./domain/mark-price";
 import type { Candle } from "./domain/market";
 
@@ -15,6 +23,9 @@ let speed = 1;
 let symbol = "BTCUSDT";
 let marketDataSymbol = "BTCUSDT";
 let marketDataInterval = "1m";
+let historicalLoadController: AbortController | null = null;
+let isHistoricalLoading = false;
+let historicalLoadGeneration = 0;
 let side: Side = "LONG";
 let orderType: "market" | "limit" = "market";
 let limitPrice: number | null = null;
@@ -50,6 +61,7 @@ app.innerHTML = `
         <label>Start (local time)<input id="range-start" type="datetime-local"/></label>
         <label>End (local time)<input id="range-end" type="datetime-local"/></label>
         <p>Leave both dates blank for the latest 1,000 closed candles. Historical ranges are paginated, with a ${MAX_REPLAY_CANDLES.toLocaleString("en-US")} candle safety limit.</p>
+        <button id="cancel-load" class="ghost" type="button" hidden>Cancel load</button>
       </div>
       <div class="chart-card">
         <div class="chart-meta"><span>PRICE ACTION</span><span id="ohlc">Waiting for replay</span></div>
@@ -199,6 +211,7 @@ function drawActivity() {
   }
 }
 function advanceOneBar() {
+  if (isHistoricalLoading) return snapshot();
   const previousActivity = session.activitySnapshot()[0];
   const state = session.step();
   const latestActivity = session.activitySnapshot()[0];
@@ -213,12 +226,14 @@ function advanceOneBar() {
   return state;
 }
 function replayStep() {
+  if (isHistoricalLoading) return;
   const state = advanceOneBar();
   if (state.status === "playing" && state.index < candles.length - 1) {
     timer = setTimeout(replayStep, Math.max(5, 1000 / speed));
   } else stopTimer();
 }
 function seekReplay(index: number) {
+  if (isHistoricalLoading) return;
   stopTimer();
   session.seek(index);
   el<HTMLElement>("notice").textContent = index < 0
@@ -264,22 +279,37 @@ function parseCsv(text: string): Candle[] {
   return parsed;
 }
 async function fetchBinance() {
-  const button = el<HTMLButtonElement>("load-binance");
+  if (isHistoricalLoading) return;
+  const sessionBeforeLoad = session;
+  const currentState = session.snapshot();
+  const hasStateToReplace = currentState.index >= 0 ||
+    session.activitySnapshot().length > 0 ||
+    session.accountSnapshot().position !== null ||
+    session.ordersSnapshot().length > 0;
+  if (hasStateToReplace && !window.confirm(
+    "Loading a new dataset resets the current replay and paper-account history. Continue?",
+  )) return;
+
+  const cancelButton = el<HTMLButtonElement>("cancel-load");
   const notice = el<HTMLElement>("notice");
-  const symbolSelect = el<HTMLSelectElement>("symbol");
-  const intervalSelect = el<HTMLSelectElement>("timeframe");
-  const startInput = el<HTMLInputElement>("range-start");
-  const endInput = el<HTMLInputElement>("range-end");
-  const csvInput = el<HTMLInputElement>("csv");
-  const importButton = el<HTMLButtonElement>("import-csv");
-  const wasDisabled = [symbolSelect.disabled, intervalSelect.disabled, startInput.disabled, endInput.disabled, csvInput.disabled, importButton.disabled];
-  button.disabled = true;
-  symbolSelect.disabled = true;
-  intervalSelect.disabled = true;
-  startInput.disabled = true;
-  endInput.disabled = true;
-  csvInput.disabled = true;
-  importButton.disabled = true;
+  const controlIds = [
+    "load-binance", "symbol", "timeframe", "range-start", "range-end", "csv", "import-csv",
+    "play", "step", "step-back", "seek", "reset", "submit", "close", "cancel-orders",
+    "speed", "order-type", "quantity", "leverage", "limit-price", "sl-price", "tp-price", "long", "short",
+  ];
+  const controls = controlIds.map((id) => el<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>(id));
+  const wasDisabled = controls.map((control) => control.disabled);
+  const wasPlaying = currentState.status === "playing";
+  const loadController = new AbortController();
+  const generation = ++historicalLoadGeneration;
+  historicalLoadController = loadController;
+  isHistoricalLoading = true;
+  let loadSucceeded = false;
+  stopTimer();
+  session.pause();
+  controls.forEach((control) => { control.disabled = true; });
+  cancelButton.hidden = false;
+  cancelButton.disabled = false;
   notice.textContent = "Preparing historical Binance Futures data request…";
   try {
     const interval = el<HTMLSelectElement>("timeframe").value as SupportedInterval;
@@ -309,7 +339,9 @@ async function fetchBinance() {
       startTime,
       endTime,
       maxCandles: MAX_REPLAY_CANDLES,
+      signal: loadController.signal,
       onProgress: (progress) => {
+        if (generation !== historicalLoadGeneration || loadController.signal.aborted) return;
         notice.textContent = "Loading " + progress.dataset + " · page " + progress.page +
           " · " + progress.records.toLocaleString("en-US") + " record(s) collected…";
       },
@@ -331,20 +363,35 @@ async function fetchBinance() {
       data.marks,
       { symbol: pair, interval },
     );
+    loadSucceeded = true;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    notice.textContent = "Unable to load Binance data: " + message + ". You can import a CSV instead.";
+    if (generation !== historicalLoadGeneration) return;
+    if (loadController.signal.aborted || error instanceof HistoricalLoadCancelledError) {
+      notice.textContent = "Historical data load cancelled. The existing dataset and paper state were preserved.";
+    } else {
+      const message = error instanceof Error ? error.message : String(error);
+      notice.textContent = error instanceof HistoricalRequestTimeoutError
+        ? "Binance request timed out: " + message + ". The existing dataset and paper state were preserved."
+        : error instanceof HistoricalLoadTimeoutError
+        ? message + ". The existing dataset and paper state were preserved."
+        : "Unable to load Binance data: " + message + ". The existing dataset and paper state were preserved.";
+    }
   } finally {
-    button.disabled = false;
-    symbolSelect.disabled = wasDisabled[0];
-    intervalSelect.disabled = wasDisabled[1];
-    startInput.disabled = wasDisabled[2];
-    endInput.disabled = wasDisabled[3];
-    csvInput.disabled = wasDisabled[4];
-    importButton.disabled = wasDisabled[5];
+    if (generation === historicalLoadGeneration) {
+      historicalLoadController = null;
+      isHistoricalLoading = false;
+      cancelButton.hidden = true;
+      controls.forEach((control, index) => { control.disabled = wasDisabled[index]; });
+      if (loadSucceeded) drawChart();
+      if (wasPlaying && session === sessionBeforeLoad) {
+        session.play();
+        replayStep();
+      }
+    }
   }
 }
 el<HTMLButtonElement>("play").addEventListener("click", () => {
+  if (isHistoricalLoading) return;
   if (snapshot().status === "playing") {
     stopTimer();
     session.pause();
@@ -356,6 +403,7 @@ el<HTMLButtonElement>("play").addEventListener("click", () => {
   replayStep();
 });
 el<HTMLButtonElement>("step").addEventListener("click", () => {
+  if (isHistoricalLoading) return;
   stopTimer();
   session.pause();
   advanceOneBar();
@@ -363,10 +411,12 @@ el<HTMLButtonElement>("step").addEventListener("click", () => {
 el<HTMLButtonElement>("step-back").addEventListener("click", () => seekReplay(Math.max(-1, snapshot().index - 1)));
 el<HTMLInputElement>("seek").addEventListener("input", (event) => seekReplay(Number((event.target as HTMLInputElement).value)));
 el<HTMLSelectElement>("speed").addEventListener("change", (event) => {
+  if (isHistoricalLoading) return;
   speed = Number((event.target as HTMLSelectElement).value);
   session.setSpeed(speed);
 });
 el<HTMLSelectElement>("symbol").addEventListener("change", (event) => {
+  if (isHistoricalLoading) return;
   const select = event.target as HTMLSelectElement;
   const pair = select.value;
   if (session.accountSnapshot().position || session.ordersSnapshot().some((order) => order.status === "PENDING")) {
@@ -379,18 +429,20 @@ el<HTMLSelectElement>("symbol").addEventListener("change", (event) => {
   el<HTMLElement>("notice").textContent = "Symbol selected. Fetch Binance candles to load its historical data.";
 });
 el<HTMLSelectElement>("order-type").addEventListener("change", (event) => {
+  if (isHistoricalLoading) return;
   orderType = (event.target as HTMLSelectElement).value as "market" | "limit";
   el<HTMLElement>("limit-wrap").hidden = orderType !== "limit";
   updatePreview();
 });
 el<HTMLInputElement>("limit-price").addEventListener("input", (event) => {
+  if (isHistoricalLoading) return;
   const value = Number((event.target as HTMLInputElement).value);
   limitPrice = Number.isFinite(value) && value > 0 ? value : null;
 });
-el<HTMLInputElement>("quantity").addEventListener("input", updatePreview);
-el<HTMLInputElement>("leverage").addEventListener("input", updatePreview);
-el<HTMLButtonElement>("long").addEventListener("click", () => { side = "LONG"; updateSideUi(); });
-el<HTMLButtonElement>("short").addEventListener("click", () => { side = "SHORT"; updateSideUi(); });
+el<HTMLInputElement>("quantity").addEventListener("input", () => { if (!isHistoricalLoading) updatePreview(); });
+el<HTMLInputElement>("leverage").addEventListener("input", () => { if (!isHistoricalLoading) updatePreview(); });
+el<HTMLButtonElement>("long").addEventListener("click", () => { if (isHistoricalLoading) return; side = "LONG"; updateSideUi(); });
+el<HTMLButtonElement>("short").addEventListener("click", () => { if (isHistoricalLoading) return; side = "SHORT"; updateSideUi(); });
 function updateSideUi() {
   el<HTMLButtonElement>("long").className = `side-button ${side === "LONG" ? "selected-long" : ""}`;
   el<HTMLButtonElement>("short").className = `side-button ${side === "SHORT" ? "selected-short" : ""}`;
@@ -399,6 +451,7 @@ function updateSideUi() {
   button.className = side === "LONG" ? "submit-long" : "submit-short";
 }
 el<HTMLButtonElement>("submit").addEventListener("click", () => {
+  if (isHistoricalLoading) return;
   try {
     const state = snapshot();
     if (!state.candle) throw new Error("Start replay before placing an order");
@@ -450,6 +503,7 @@ el<HTMLButtonElement>("submit").addEventListener("click", () => {
   }
 });
 el<HTMLButtonElement>("close").addEventListener("click", () => {
+  if (isHistoricalLoading) return;
   try {
     if (!snapshot().candle) throw new Error("No replay price available");
     if (!session.accountSnapshot().position) throw new Error("No open position");
@@ -462,11 +516,13 @@ el<HTMLButtonElement>("close").addEventListener("click", () => {
   }
 });
 el<HTMLButtonElement>("reset").addEventListener("click", () => {
+  if (isHistoricalLoading) return;
   session.resetAccount();
   drawChart();
   el<HTMLElement>("notice").textContent = "Paper account and order history reset at the current replay position.";
 });
 el<HTMLButtonElement>("cancel-orders").addEventListener("click", () => {
+  if (isHistoricalLoading) return;
   const pending = session.ordersSnapshot().filter((order) => order.status === "PENDING");
   if (pending.length === 0) {
     el<HTMLElement>("notice").textContent = "No pending orders to cancel.";
@@ -477,8 +533,15 @@ el<HTMLButtonElement>("cancel-orders").addEventListener("click", () => {
   drawChart();
 });
 el<HTMLButtonElement>("load-binance").addEventListener("click", () => void fetchBinance());
-el<HTMLButtonElement>("import-csv").addEventListener("click", () => el<HTMLInputElement>("csv").click());
+el<HTMLButtonElement>("cancel-load").addEventListener("click", () => {
+  if (!isHistoricalLoading) return;
+  historicalLoadController?.abort(new HistoricalLoadCancelledError());
+});
+el<HTMLButtonElement>("import-csv").addEventListener("click", () => {
+  if (!isHistoricalLoading) el<HTMLInputElement>("csv").click();
+});
 el<HTMLInputElement>("csv").addEventListener("change", async (event) => {
+  if (isHistoricalLoading) return;
   const file = (event.target as HTMLInputElement).files?.[0];
   if (!file) return;
   try {
@@ -487,9 +550,15 @@ el<HTMLInputElement>("csv").addEventListener("change", async (event) => {
     el<HTMLElement>("notice").textContent = error instanceof Error ? error.message : String(error);
   }
 });
-window.addEventListener("beforeunload", () => { stopTimer(); resizeObserver.disconnect(); chart.remove(); });
+window.addEventListener("beforeunload", () => {
+  stopTimer();
+  historicalLoadController?.abort(new HistoricalLoadCancelledError("Page closed during historical data load"));
+  resizeObserver.disconnect();
+  chart.remove();
+});
 
 setData(demo, "Demo data loaded. Fetch historical Binance futures candles or import a CSV.");
 el<HTMLSelectElement>("timeframe").addEventListener("change", () => {
+  if (isHistoricalLoading) return;
   el<HTMLElement>("notice").textContent = "Change timeframe, then fetch Binance candles to load that interval.";
 });

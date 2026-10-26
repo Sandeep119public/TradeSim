@@ -3,6 +3,9 @@ import type { MarkPriceCandle } from "./mark-price";
 
 export const BINANCE_PAGE_LIMIT = 1_000;
 export const MAX_REPLAY_CANDLES = 100_000;
+export const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
+export const DEFAULT_LOAD_TIMEOUT_MS = 10 * 60_000;
+export const MAX_LOAD_TIMEOUT_MS = 30 * 60_000;
 
 export type SupportedInterval = "1m" | "5m" | "15m" | "1h";
 
@@ -25,7 +28,75 @@ export interface PageProgress {
 }
 
 export type HistoricalFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-export type Sleep = (milliseconds: number) => Promise<void>;
+export type Sleep = (milliseconds: number, signal?: AbortSignal) => Promise<void>;
+
+export class HistoricalLoadCancelledError extends Error {
+  constructor(message = "Historical data load cancelled") {
+    super(message);
+    this.name = "HistoricalLoadCancelledError";
+  }
+}
+
+export class HistoricalLoadTimeoutError extends Error {
+  constructor(message = "Historical data load exceeded its time limit") {
+    super(message);
+    this.name = "HistoricalLoadTimeoutError";
+  }
+}
+
+export class HistoricalRequestTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "HistoricalRequestTimeoutError";
+  }
+}
+
+class InvalidBinanceJsonError extends Error {
+  constructor(detail: string) {
+    super("Binance returned invalid JSON: " + detail);
+    this.name = "InvalidBinanceJsonError";
+  }
+}
+
+function abortReason(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new HistoricalLoadCancelledError();
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw abortReason(signal);
+}
+
+function isCancellation(error: unknown): boolean {
+  return error instanceof HistoricalLoadCancelledError ||
+    (error instanceof Error && error.name === "AbortError");
+}
+
+function isLoadDeadline(error: unknown): boolean {
+  return error instanceof HistoricalLoadTimeoutError;
+}
+
+function retryableFailure(error: unknown): boolean {
+  return !(isCancellation(error) || isLoadDeadline(error));
+}
+
+function abortableSleep(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(abortReason(signal!));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+  });
+}
 
 export interface FetchPagedRowsOptions<T> {
   endpoint: string;
@@ -36,6 +107,11 @@ export interface FetchPagedRowsOptions<T> {
   cursorStepMs: number;
   maxRecords?: number;
   maxRetries?: number;
+  requestTimeoutMs?: number;
+  maxDurationMs?: number;
+  deadlineAt?: number;
+  signal?: AbortSignal;
+  now?: () => number;
   timestamp: (row: T) => number;
   key?: (row: T) => string;
   fetchImpl?: HistoricalFetch;
@@ -44,13 +120,13 @@ export interface FetchPagedRowsOptions<T> {
   onProgress?: (progress: PageProgress) => void;
 }
 
-function retryDelay(response: Response, attempt: number): number {
+function retryDelay(response: Response, attempt: number, now: () => number): number {
   const retryAfter = response.headers.get("Retry-After");
   if (retryAfter) {
     const seconds = Number(retryAfter);
-    if (Number.isFinite(seconds) && seconds >= 0) return Math.min(120_000, seconds * 1_000);
+    if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1_000;
     const absolute = Date.parse(retryAfter);
-    if (Number.isFinite(absolute)) return Math.min(120_000, Math.max(0, absolute - Date.now()));
+    if (Number.isFinite(absolute)) return Math.max(0, absolute - now());
   }
   if (response.status === 418) return 60_000;
   return Math.min(30_000, 500 * 2 ** attempt);
@@ -66,34 +142,88 @@ async function requestJson(
   fetchImpl: HistoricalFetch,
   sleep: Sleep,
   maxRetries: number,
+  requestTimeoutMs: number,
+  deadlineAt: number,
+  signal: AbortSignal | undefined,
+  now: () => number,
 ): Promise<unknown> {
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    throwIfAborted(signal);
+    const attemptRemainingMs = deadlineAt - now();
+    if (attemptRemainingMs <= 0) throw new HistoricalLoadTimeoutError();
+    const timeoutMs = Math.min(requestTimeoutMs, attemptRemainingMs);
+    const requestController = new AbortController();
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let externalAbort: (() => void) | undefined;
+    const operation = (async () => {
+      const response = await fetchImpl(url, {
+        headers: { accept: "application/json" },
+        signal: requestController.signal,
+      });
+      if (!response.ok) return { response, payload: undefined };
+      try {
+        return { response, payload: await response.json() };
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new InvalidBinanceJsonError(detail);
+      }
+    })();
+    let timeoutReject: ((error: Error) => void) | undefined;
+    const timeout = new Promise<never>((_, reject) => { timeoutReject = reject; });
+    const aborted = signal ? new Promise<never>((_, reject) => {
+      externalAbort = () => {
+        requestController.abort(signal.reason);
+        reject(abortReason(signal));
+      };
+      signal.addEventListener("abort", externalAbort, { once: true });
+      if (signal.aborted) externalAbort();
+    }) : new Promise<never>(() => undefined);
+    timeoutId = setTimeout(() => {
+      const atDeadline = deadlineAt - now() <= 0 || attemptRemainingMs <= requestTimeoutMs;
+      const error = atDeadline
+        ? new HistoricalLoadTimeoutError()
+        : new HistoricalRequestTimeoutError("Binance request timed out after " + requestTimeoutMs + " ms");
+      requestController.abort(error);
+      timeoutReject?.(error);
+    }, timeoutMs);
+
     let response: Response;
+    let payload: unknown;
     try {
-      response = await fetchImpl(url, { headers: { accept: "application/json" } });
+      ({ response, payload } = await Promise.race([operation, timeout, aborted]));
+      if (deadlineAt - now() <= 0) throw new HistoricalLoadTimeoutError();
     } catch (error) {
-      if (attempt >= maxRetries) {
+      if (error instanceof InvalidBinanceJsonError) throw error;
+      if (isCancellation(error) || isLoadDeadline(error)) throw error;
+      if (!retryableFailure(error) || attempt >= maxRetries) {
+        if (error instanceof HistoricalRequestTimeoutError) throw error;
         const detail = error instanceof Error ? error.message : String(error);
         throw new Error("Network request failed after " + (attempt + 1) + " attempt(s): " + detail);
       }
-      await sleep(Math.min(30_000, 500 * 2 ** attempt));
+      const waitMs = Math.min(Math.min(30_000, 500 * 2 ** attempt), Math.max(0, deadlineAt - now()));
+      if (waitMs <= 0) throw new HistoricalLoadTimeoutError();
+      await sleep(waitMs, signal);
       continue;
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+      if (externalAbort) signal?.removeEventListener("abort", externalAbort);
     }
 
-    if (response.ok) {
-      try {
-        return await response.json();
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        throw new Error("Binance returned invalid JSON: " + detail);
-      }
-    }
+    if (response.ok) return payload;
 
     if (!retryableStatus(response.status) || attempt >= maxRetries) {
       throw new Error("Binance returned HTTP " + response.status + " for " + url.pathname);
     }
 
-    await sleep(retryDelay(response, attempt));
+    const remainingMs = deadlineAt - now();
+    if (remainingMs <= 0) throw new HistoricalLoadTimeoutError();
+    const waitMs = retryDelay(response, attempt, now);
+    if (!Number.isFinite(waitMs) || waitMs < 0) throw new Error("Binance returned an invalid Retry-After delay");
+    if (waitMs >= remainingMs) {
+      await sleep(remainingMs, signal);
+      throw new HistoricalLoadTimeoutError("Historical data load deadline expired while waiting for Binance Retry-After");
+    }
+    await sleep(waitMs, signal);
   }
 
   throw new Error("Historical data request failed unexpectedly");
@@ -114,10 +244,15 @@ export async function fetchPagedRows<T>({
   cursorStepMs,
   maxRecords = MAX_REPLAY_CANDLES,
   maxRetries = 3,
+  requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+  maxDurationMs = DEFAULT_LOAD_TIMEOUT_MS,
+  deadlineAt: providedDeadline,
+  signal,
+  now = Date.now,
   timestamp,
   key = (row) => String(timestamp(row)),
   fetchImpl = fetch,
-  sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  sleep = abortableSleep,
   dataset,
   onProgress,
 }: FetchPagedRowsOptions<T>): Promise<T[]> {
@@ -127,7 +262,11 @@ export async function fetchPagedRows<T>({
   if (!Number.isFinite(cursorStepMs) || cursorStepMs < 1) throw new RangeError("Cursor step must be at least 1 millisecond");
   if (!Number.isInteger(maxRecords) || maxRecords < 1) throw new RangeError("maxRecords must be a positive integer");
   if (!Number.isInteger(maxRetries) || maxRetries < 0 || maxRetries > 10) throw new RangeError("maxRetries must be an integer from 0 to 10");
+  if (!Number.isFinite(requestTimeoutMs) || requestTimeoutMs < 1 || requestTimeoutMs > 60_000) throw new RangeError("requestTimeoutMs must be between 1 and 60000 milliseconds");
+  if (!Number.isFinite(maxDurationMs) || maxDurationMs < 1 || maxDurationMs > MAX_LOAD_TIMEOUT_MS) throw new RangeError("maxDurationMs must be between 1 and " + MAX_LOAD_TIMEOUT_MS + " milliseconds");
 
+  const deadlineAt = providedDeadline ?? now() + maxDurationMs;
+  if (!Number.isFinite(deadlineAt)) throw new RangeError("deadlineAt must be finite");
   const rowsByKey = new Map<string, T>();
   let cursor = startTime;
   let page = 0;
@@ -139,7 +278,7 @@ export async function fetchPagedRows<T>({
     url.searchParams.set("endTime", String(endTime));
     url.searchParams.set("limit", String(limit));
 
-    const payload = await requestJson(url, fetchImpl, sleep, maxRetries);
+    const payload = await requestJson(url, fetchImpl, sleep ?? abortableSleep, maxRetries, requestTimeoutMs, deadlineAt, signal, now);
     if (!Array.isArray(payload)) throw new Error("Unexpected " + dataset + " response: expected an array");
     const pageRows = payload as T[];
     if (pageRows.length === 0) break;
@@ -208,6 +347,10 @@ export interface BinanceHistoricalDataOptions {
   nowMs?: number;
   maxCandles?: number;
   maxRetries?: number;
+  requestTimeoutMs?: number;
+  maxDurationMs?: number;
+  signal?: AbortSignal;
+  now?: () => number;
   fetchImpl?: HistoricalFetch;
   sleep?: Sleep;
   onProgress?: (progress: PageProgress) => void;
@@ -284,6 +427,10 @@ export async function loadBinanceHistoricalData({
   nowMs = Date.now(),
   maxCandles = MAX_REPLAY_CANDLES,
   maxRetries = 3,
+  requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+  maxDurationMs = DEFAULT_LOAD_TIMEOUT_MS,
+  signal,
+  now = Date.now,
   fetchImpl = fetch,
   sleep,
   onProgress,
@@ -294,6 +441,10 @@ export async function loadBinanceHistoricalData({
   }
   if (!Number.isFinite(nowMs)) throw new RangeError("nowMs must be finite");
   if (!Number.isInteger(maxCandles) || maxCandles < 1) throw new RangeError("maxCandles must be a positive integer");
+  if (!Number.isFinite(requestTimeoutMs) || requestTimeoutMs < 1 || requestTimeoutMs > 60_000) throw new RangeError("requestTimeoutMs must be between 1 and 60000 milliseconds");
+  if (!Number.isFinite(maxDurationMs) || maxDurationMs < 1 || maxDurationMs > MAX_LOAD_TIMEOUT_MS) throw new RangeError("maxDurationMs must be between 1 and " + MAX_LOAD_TIMEOUT_MS + " milliseconds");
+  throwIfAborted(signal);
+  const deadlineAt = now() + maxDurationMs;
   const intervalMs = intervalToMs(interval);
   // Candle opens are interval-aligned. Count those actual slots, not an
   // approximate duration-based count, so off-boundary times are handled safely.
@@ -316,6 +467,10 @@ export async function loadBinanceHistoricalData({
     cursorStepMs: intervalMs,
     maxRecords: maxCandles,
     maxRetries,
+    requestTimeoutMs,
+    deadlineAt,
+    signal,
+    now,
     timestamp: (row) => Number(row[0]),
     fetchImpl,
     sleep,
@@ -348,6 +503,10 @@ export async function loadBinanceHistoricalData({
       cursorStepMs: intervalMs,
       maxRecords: maxCandles,
       maxRetries,
+      requestTimeoutMs,
+      deadlineAt,
+      signal,
+      now,
       timestamp: (row) => Number(row[0]),
       fetchImpl,
       sleep,
@@ -363,6 +522,7 @@ export async function loadBinanceHistoricalData({
       warnings.push(aligned + "/" + candles.length + " candle-aligned mark-price candles loaded; missing mark candles use trade-price fallback for mark-to-market/liquidation.");
     }
   } catch (error) {
+    if (isCancellation(error) || isLoadDeadline(error)) throw error;
     const detail = error instanceof Error ? error.message : String(error);
     warnings.push("Historical mark-price candles unavailable: " + detail + ". Trade prices will be used as a fallback for mark-to-market/liquidation.");
     marks = [];
@@ -379,6 +539,10 @@ export async function loadBinanceHistoricalData({
       cursorStepMs: 1,
       maxRecords: maxCandles,
       maxRetries,
+      requestTimeoutMs,
+      deadlineAt,
+      signal,
+      now,
       timestamp: (row) => Number((row as Record<string, unknown>).fundingTime),
       key: (row) => {
         const item = row as Record<string, unknown>;
@@ -395,11 +559,14 @@ export async function loadBinanceHistoricalData({
       markPrice,
     }));
   } catch (error) {
+    if (isCancellation(error) || isLoadDeadline(error)) throw error;
     const detail = error instanceof Error ? error.message : String(error);
     warnings.push("Historical funding history unavailable: " + detail + ". Funding will not be included for this dataset.");
     funding = [];
   }
 
+  throwIfAborted(signal);
+  if (now() >= deadlineAt) throw new HistoricalLoadTimeoutError();
   return {
     candles,
     funding,

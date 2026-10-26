@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  HistoricalLoadCancelledError,
+  HistoricalLoadTimeoutError,
   fetchPagedRows,
   inspectCandleGaps,
   loadBinanceHistoricalData,
@@ -99,6 +101,150 @@ describe("fetchPagedRows", () => {
       sleep: async () => undefined,
       dataset: "trade candles",
     })).rejects.toThrow("pagination made no progress");
+  });
+
+  it("times out and aborts a request that never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      let requestSignal: AbortSignal | undefined;
+      const pending = fetchPagedRows({
+        endpoint: "https://example.test/klines",
+        params: {},
+        startTime: 1_000,
+        endTime: 1_000,
+        limit: 10,
+        cursorStepMs: 1,
+        requestTimeoutMs: 25,
+        maxDurationMs: 1_000,
+        maxRetries: 0,
+        timestamp: (row: { time: number }) => row.time,
+        fetchImpl: async (_input, init) => {
+          requestSignal = init?.signal ?? undefined;
+          return new Promise<Response>(() => undefined);
+        },
+        dataset: "trade candles",
+      });
+      const assertion = expect(pending).rejects.toThrow("timed out after 25 ms");
+
+      await vi.advanceTimersByTimeAsync(25);
+      await assertion;
+      expect(requestSignal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("propagates explicit cancellation instead of reporting a network error", async () => {
+    const controller = new AbortController();
+    let requestSignal: AbortSignal | undefined;
+    const pending = fetchPagedRows({
+      endpoint: "https://example.test/klines",
+      params: {},
+      startTime: 1_000,
+      endTime: 1_000,
+      limit: 10,
+      cursorStepMs: 1,
+      timestamp: (row: { time: number }) => row.time,
+      fetchImpl: async (_input, init) => {
+        requestSignal = init?.signal ?? undefined;
+        return new Promise<Response>(() => undefined);
+      },
+      signal: controller.signal,
+      dataset: "trade candles",
+    });
+    const assertion = expect(pending).rejects.toBeInstanceOf(HistoricalLoadCancelledError);
+    controller.abort(new HistoricalLoadCancelledError());
+
+    await assertion;
+    expect(requestSignal?.aborted).toBe(true);
+  });
+
+  it("cancels retry backoff promptly", async () => {
+    const controller = new AbortController();
+    let enterBackoff: (() => void) | undefined;
+    const pending = fetchPagedRows({
+      endpoint: "https://example.test/klines",
+      params: {},
+      startTime: 1_000,
+      endTime: 1_000,
+      limit: 10,
+      cursorStepMs: 1,
+      timestamp: (row: { time: number }) => row.time,
+      fetchImpl: async () => jsonResponse({ message: "rate limited" }, 429),
+      sleep: (_milliseconds, signal) => new Promise((_resolve, reject) => {
+        enterBackoff = () => undefined;
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        if (signal?.aborted) reject(signal.reason);
+      }),
+      signal: controller.signal,
+      dataset: "trade candles",
+    });
+    await vi.waitFor(() => expect(enterBackoff).toBeDefined());
+    const assertion = expect(pending).rejects.toBeInstanceOf(HistoricalLoadCancelledError);
+    controller.abort(new HistoricalLoadCancelledError());
+
+    await assertion;
+  });
+
+  it("honors a valid Retry-After longer than the old two-minute cap", async () => {
+    let currentTime = 0;
+    const waits: number[] = [];
+    let calls = 0;
+    const result = await fetchPagedRows({
+      endpoint: "https://example.test/klines",
+      params: {},
+      startTime: 1_000,
+      endTime: 1_000,
+      limit: 10,
+      cursorStepMs: 1,
+      timestamp: (row: { time: number }) => row.time,
+      fetchImpl: async () => {
+        calls += 1;
+        return calls === 1
+          ? jsonResponse({ message: "rate limited" }, 429, { "Retry-After": "150" })
+          : jsonResponse([{ time: 1_000 }]);
+      },
+      sleep: async (milliseconds) => {
+        waits.push(milliseconds);
+        currentTime += milliseconds;
+      },
+      now: () => currentTime,
+      maxDurationMs: 240_000,
+      dataset: "trade candles",
+    });
+
+    expect(waits).toEqual([150_000]);
+    expect(calls).toBe(2);
+    expect(result).toEqual([{ time: 1_000 }]);
+  });
+
+  it("bounds a Retry-After wait by the overall load deadline", async () => {
+    let currentTime = 0;
+    const waits: number[] = [];
+    let calls = 0;
+    await expect(fetchPagedRows({
+      endpoint: "https://example.test/klines",
+      params: {},
+      startTime: 1_000,
+      endTime: 1_000,
+      limit: 10,
+      cursorStepMs: 1,
+      timestamp: (row: { time: number }) => row.time,
+      fetchImpl: async () => {
+        calls += 1;
+        return jsonResponse({ message: "rate limited" }, 429, { "Retry-After": "3600" });
+      },
+      sleep: async (milliseconds) => {
+        waits.push(milliseconds);
+        currentTime += milliseconds;
+      },
+      now: () => currentTime,
+      maxDurationMs: 10_000,
+      dataset: "trade candles",
+    })).rejects.toBeInstanceOf(HistoricalLoadTimeoutError);
+
+    expect(waits).toEqual([10_000]);
+    expect(calls).toBe(1);
   });
 });
 
