@@ -87,6 +87,31 @@ function entryCandleSession(
 }
 
 describe("ReplaySession funding and reconstruction", () => {
+  it("keeps recorded-action awareness after seeking to the beginning", () => {
+    const session = new ReplaySession([candle(0), candle(1)], [], [], {
+      candleIntervalMs: intervalMs,
+    });
+
+    expect(session.hasRecordedUserActions()).toBe(false);
+    session.step();
+    expect(session.hasRecordedUserActions()).toBe(false);
+    session.submitOrder(marketOrder("LONG", { stopLossPrice: null, takeProfitPrice: null }));
+    expect(session.hasRecordedUserActions()).toBe(true);
+    expect(session.ordersSnapshot()).toHaveLength(1);
+    expect(session.activitySnapshot()).toHaveLength(1);
+
+    session.seek(-1);
+    expect(session.snapshot().index).toBe(-1);
+    expect(session.accountSnapshot().position).toBeNull();
+    expect(session.ordersSnapshot()).toEqual([]);
+    expect(session.activitySnapshot()).toEqual([]);
+    expect(session.hasRecordedUserActions()).toBe(true);
+
+    session.step();
+    expect(session.ordersSnapshot()).toHaveLength(1);
+    expect(session.activitySnapshot()[0].message).toContain("SUBMITTED #1");
+  });
+
   it("skips a missing event mark when no mark observation is available by settlement", () => {
     const candles = [candle(0), candle(1), candle(2, { open: 100, high: 205, low: 95, close: 200 })];
     const funding: HistoricalFunding[] = [{ fundingTime: candles[2].time, fundingRate: 0.01, markPrice: null }];

@@ -283,6 +283,7 @@ async function fetchBinance() {
   const sessionBeforeLoad = session;
   const currentState = session.snapshot();
   const hasStateToReplace = currentState.index >= 0 ||
+    session.hasRecordedUserActions() ||
     session.activitySnapshot().length > 0 ||
     session.accountSnapshot().position !== null ||
     session.ordersSnapshot().length > 0;

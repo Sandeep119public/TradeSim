@@ -302,6 +302,43 @@ test("supports cancellation and keeps a later load from being replaced by the ca
   await expect(page.locator("#current-time")).toHaveText("Not started");
 });
 
+test("confirms dataset replacement for journaled actions after seeking back to the start", async ({ page }) => {
+  const startDate = new Date(Date.UTC(2025, 3, 1, 0, 0));
+  const candleTimes = [startDate.getTime(), startDate.getTime() + INTERVAL_MS];
+  await mockBinance(page, { candleTimes });
+
+  await page.goto("/");
+  await page.locator("#step").click();
+  await page.locator("#submit").click();
+  await expect(page.locator("#activity-list")).toContainText("SUBMITTED #1");
+  await page.locator("#seek").evaluate((slider: HTMLInputElement) => {
+    slider.value = "-1";
+    slider.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await expect(page.locator("#current-time")).toHaveText("Not started");
+  await expect(page.locator("#activity-list")).toHaveText("No order activity yet");
+
+  await page.locator("#range-start").fill(inputDate(startDate));
+  await page.locator("#range-end").fill(inputDate(new Date(candleTimes[1])));
+  let declinedMessage = "";
+  page.once("dialog", async (dialog) => {
+    declinedMessage = dialog.message();
+    await dialog.dismiss();
+  });
+  await page.locator("#load-binance").click();
+  expect(declinedMessage).toContain("resets the current replay and paper-account history");
+  await expect(page.locator("#load-binance")).toBeEnabled();
+
+  await page.locator("#step").click();
+  await expect(page.locator("#activity-list")).toContainText("SUBMITTED #1");
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.locator("#load-binance").click();
+  await expect(page.locator("#notice")).toContainText("Loaded 2 public Binance Futures BTCUSDT candles.");
+  await expect(page.locator("#current-time")).toHaveText("Not started");
+  await expect(page.locator("#activity-list")).toHaveText("No order activity yet");
+});
+
 test("times out a stalled request and restores the interface", async ({ page }) => {
   await page.clock.install({ time: new Date() });
   await page.route("https://fapi.binance.com/**", async (route) => {

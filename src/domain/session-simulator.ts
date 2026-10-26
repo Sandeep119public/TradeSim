@@ -98,6 +98,10 @@ export class ReplaySession {
     return this.replay.snapshot();
   }
 
+  hasRecordedUserActions(): boolean {
+    return this.journal.length > 0;
+  }
+
   accountSnapshot(): AccountSnapshot {
     return this.account.snapshot();
   }
