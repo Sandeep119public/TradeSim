@@ -33,7 +33,7 @@ TradeSim is a local-first simulator for replaying historical Binance USDⓈ-M fu
 Requires Node.js **22.12.x, 24.x, or 26+**. Vitest 5 does not support Node 20 or Node 23; Node 24 is used for release validation.
 
 ```sh
-npm install
+npm ci
 npm run dev
 npm test
 npm run build
