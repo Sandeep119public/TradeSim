@@ -27,7 +27,7 @@ function klineRow(time: number): Array<string | number> {
 
 interface BinanceMockOptions {
   candleTimes: number[];
-  pauseFirstTradePage?: boolean;
+  pauseFirstTradePage?: { onRequest: () => void; release: Promise<void> };
   pauseSecondTradePage?: boolean;
   optionalEndpointStatus?: number;
 }
@@ -71,7 +71,8 @@ async function mockBinance(page: Page, options: BinanceMockOptions): Promise<Map
     const limit = Number(url.searchParams.get("limit") ?? "1000");
 
     if (options.pauseFirstTradePage && url.pathname === "/fapi/v1/klines" && requests.get(url.pathname) === 1) {
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      options.pauseFirstTradePage.onRequest();
+      await options.pauseFirstTradePage.release;
     } else if (
       options.pauseSecondTradePage && url.pathname === "/fapi/v1/klines" && startTime > options.candleTimes[0]
     ) {
@@ -167,10 +168,17 @@ test("keeps trade candles usable and reports gaps when optional endpoints fail",
   await expect(page.locator("#symbol")).toBeEnabled();
 });
 
-test("freezes replay and paper actions during a delayed load, then starts the new dataset cleanly", async ({ page }) => {
+test("preserves paper state during a gated load and asks before replacing it", async ({ page }) => {
   const startDate = new Date(Date.UTC(2025, 0, 3, 0, 0));
   const candleTimes = Array.from({ length: 3 }, (_, index) => startDate.getTime() + index * INTERVAL_MS);
-  await mockBinance(page, { candleTimes, pauseFirstTradePage: true });
+  let signalTradeRequest!: () => void;
+  let releaseTradeResponse!: () => void;
+  const tradeRequestStarted = new Promise<void>((resolve) => { signalTradeRequest = resolve; });
+  const tradeResponseGate = new Promise<void>((resolve) => { releaseTradeResponse = resolve; });
+  await mockBinance(page, {
+    candleTimes,
+    pauseFirstTradePage: { onRequest: signalTradeRequest, release: tradeResponseGate },
+  });
 
   await page.goto("/");
   await page.locator("#step").click();
@@ -181,8 +189,8 @@ test("freezes replay and paper actions during a delayed load, then starts the ne
 
   await page.locator("#range-start").fill(inputDate(startDate));
   await page.locator("#range-end").fill(inputDate(new Date(candleTimes[2])));
-  page.once("dialog", (dialog) => dialog.accept());
   await page.locator("#load-binance").click();
+  await tradeRequestStarted;
   await expect(page.locator("#cancel-load")).toBeVisible();
 
   const lockedIds = [
@@ -196,7 +204,7 @@ test("freezes replay and paper actions during a delayed load, then starts the ne
   const oldPosition = await page.locator("#position-summary").textContent();
   const oldActivity = await page.locator("#activity-list").textContent();
   const oldWallet = await page.locator("#wallet").textContent();
-  await page.evaluate(() => {
+  const attemptedActions = await page.evaluate(() => {
     for (const id of ["play", "step", "step-back", "reset", "submit", "close", "cancel-orders"]) {
       document.querySelector<HTMLButtonElement>("#" + id)?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     }
@@ -205,12 +213,38 @@ test("freezes replay and paper actions during a delayed load, then starts the ne
       seek.value = "0";
       seek.dispatchEvent(new Event("input", { bubbles: true }));
     }
+    return {
+      currentTime: document.querySelector("#current-time")?.textContent,
+      position: document.querySelector("#position-summary")?.textContent,
+      activity: document.querySelector("#activity-list")?.textContent,
+      wallet: document.querySelector("#wallet")?.textContent,
+    };
   });
-  await page.waitForTimeout(150);
-  await expect(page.locator("#current-time")).toHaveText(before ?? "");
-  await expect(page.locator("#position-summary")).toHaveText(oldPosition ?? "");
+  expect(attemptedActions).toEqual({
+    currentTime: before,
+    position: oldPosition,
+    activity: oldActivity,
+    wallet: oldWallet,
+  });
+
+  let declinedMessage = "";
+  page.once("dialog", async (dialog) => {
+    declinedMessage = dialog.message();
+    await dialog.dismiss();
+  });
+  releaseTradeResponse();
+  await expect(page.locator("#notice")).toContainText("replacement was declined");
+  expect(declinedMessage).toContain("resets the current replay and paper-account history");
+  await expect(page.locator("#position-summary")).toContainText("BTCUSDT · LONG");
   await expect(page.locator("#activity-list")).toHaveText(oldActivity ?? "");
   await expect(page.locator("#wallet")).toHaveText(oldWallet ?? "");
+
+  await expect(page.locator("#play")).toHaveText("Ⅱ Pause");
+  await page.locator("#play").click();
+  await expect(page.locator("#play")).toHaveText("▶ Play");
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.locator("#load-binance").click();
 
   await expect(page.locator("#notice")).toContainText("Loaded 3 public Binance Futures BTCUSDT candles.");
   await expect(page.locator("#current-time")).toHaveText("Not started");
@@ -235,15 +269,25 @@ test("restores loading controls after a required candle request fails", async ({
     }
   });
   await page.goto("/");
+  await page.locator("#step").click();
+  await page.locator("#submit").click();
+  await page.locator("#step").click();
+  const oldCurrentTime = await page.locator("#current-time").textContent();
+  const oldPosition = await page.locator("#position-summary").textContent();
+  const oldActivity = await page.locator("#activity-list").textContent();
+  const oldWallet = await page.locator("#wallet").textContent();
   await page.locator("#load-binance").click();
 
   await expect(page.locator("#notice")).toContainText("Unable to load Binance data: Binance returned HTTP 400");
   for (const id of ["load-binance", "symbol", "timeframe", "range-start", "range-end", "csv", "import-csv", "play", "step", "step-back", "seek", "reset", "submit", "cancel-orders"]) {
     await expect(page.locator("#" + id)).toBeEnabled();
   }
-  await expect(page.locator("#close")).toBeDisabled();
+  await expect(page.locator("#close")).toBeEnabled();
   await expect(page.locator("#cancel-load")).toBeHidden();
-  await expect(page.locator("#current-time")).toHaveText("Not started");
+  await expect(page.locator("#current-time")).toHaveText(oldCurrentTime ?? "");
+  await expect(page.locator("#position-summary")).toHaveText(oldPosition ?? "");
+  await expect(page.locator("#activity-list")).toHaveText(oldActivity ?? "");
+  await expect(page.locator("#wallet")).toHaveText(oldWallet ?? "");
 });
 
 test("supports cancellation and keeps a later load from being replaced by the cancelled request", async ({ page }) => {
@@ -252,16 +296,23 @@ test("supports cancellation and keeps a later load from being replaced by the ca
   const oldTime = oldStart.getTime();
   const newTimes = Array.from({ length: 2 }, (_, index) => newStart.getTime() + index * INTERVAL_MS);
   let releaseOldResponse: (() => void) | undefined;
+  let signalOldRequest: (() => void) | undefined;
+  let signalOldRouteFinished: (() => void) | undefined;
   const oldResponse = new Promise<void>((resolve) => { releaseOldResponse = resolve; });
+  const oldRequestStarted = new Promise<void>((resolve) => { signalOldRequest = resolve; });
+  const oldRouteFinished = new Promise<void>((resolve) => { signalOldRouteFinished = resolve; });
   await page.route("https://fapi.binance.com/**", async (route) => {
     const url = new URL(route.request().url());
     const startTime = Number(url.searchParams.get("startTime"));
     if (url.pathname === "/fapi/v1/klines" && startTime <= oldTime && Number(url.searchParams.get("endTime")) >= oldTime) {
+      signalOldRequest?.();
       await oldResponse;
       try {
         await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([klineRow(oldTime)]) });
       } catch {
         // The browser request should have been aborted by the explicit cancel action.
+      } finally {
+        signalOldRouteFinished?.();
       }
       return;
     }
@@ -276,19 +327,25 @@ test("supports cancellation and keeps a later load from being replaced by the ca
   await page.goto("/");
   await page.locator("#step").click();
   await page.locator("#submit").click();
+  await page.locator("#step").click();
   const oldCurrentTime = await page.locator("#current-time").textContent();
+  const oldPosition = await page.locator("#position-summary").textContent();
   const oldActivity = await page.locator("#activity-list").textContent();
+  const oldWallet = await page.locator("#wallet").textContent();
   page.on("dialog", (dialog) => dialog.accept());
   await page.locator("#range-start").fill(inputDate(oldStart));
   await page.locator("#range-end").fill(inputDate(oldStart));
   await page.locator("#load-binance").click();
+  await oldRequestStarted;
   await expect(page.locator("#cancel-load")).toBeVisible();
   await page.locator("#cancel-load").click();
   await expect(page.locator("#notice")).toContainText("load cancelled");
   await expect(page.locator("#notice")).not.toContainText("network request failed");
   await expect(page.locator("#load-binance")).toBeEnabled();
   await expect(page.locator("#current-time")).toHaveText(oldCurrentTime ?? "");
+  await expect(page.locator("#position-summary")).toHaveText(oldPosition ?? "");
   await expect(page.locator("#activity-list")).toHaveText(oldActivity ?? "");
+  await expect(page.locator("#wallet")).toHaveText(oldWallet ?? "");
   await expect(page.locator("#activity-list")).not.toHaveText("No order activity yet");
 
   await page.locator("#range-start").fill(inputDate(newStart));
@@ -297,7 +354,7 @@ test("supports cancellation and keeps a later load from being replaced by the ca
   await expect(page.locator("#notice")).toContainText("Loaded 2 public Binance Futures BTCUSDT candles.");
 
   releaseOldResponse?.();
-  await page.waitForTimeout(50);
+  await oldRouteFinished;
   await expect(page.locator("#notice")).toContainText("Loaded 2 public Binance Futures BTCUSDT candles.");
   await expect(page.locator("#current-time")).toHaveText("Not started");
 });
@@ -326,6 +383,7 @@ test("confirms dataset replacement for journaled actions after seeking back to t
     await dialog.dismiss();
   });
   await page.locator("#load-binance").click();
+  await expect(page.locator("#notice")).toContainText("replacement was declined");
   expect(declinedMessage).toContain("resets the current replay and paper-account history");
   await expect(page.locator("#load-binance")).toBeEnabled();
 

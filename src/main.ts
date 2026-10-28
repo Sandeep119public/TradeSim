@@ -282,15 +282,6 @@ async function fetchBinance() {
   if (isHistoricalLoading) return;
   const sessionBeforeLoad = session;
   const currentState = session.snapshot();
-  const hasStateToReplace = currentState.index >= 0 ||
-    session.hasRecordedUserActions() ||
-    session.activitySnapshot().length > 0 ||
-    session.accountSnapshot().position !== null ||
-    session.ordersSnapshot().length > 0;
-  if (hasStateToReplace && !window.confirm(
-    "Loading a new dataset resets the current replay and paper-account history. Continue?",
-  )) return;
-
   const cancelButton = el<HTMLButtonElement>("cancel-load");
   const notice = el<HTMLElement>("notice");
   const controlIds = [
@@ -347,6 +338,19 @@ async function fetchBinance() {
           " · " + progress.records.toLocaleString("en-US") + " record(s) collected…";
       },
     });
+
+    const stateToReplace = session.snapshot();
+    const hasStateToReplace = stateToReplace.index >= 0 ||
+      session.hasRecordedUserActions() ||
+      session.activitySnapshot().length > 0 ||
+      session.accountSnapshot().position !== null ||
+      session.ordersSnapshot().length > 0;
+    if (hasStateToReplace && !window.confirm(
+      "Loading a new dataset resets the current replay and paper-account history. Continue?",
+    )) {
+      notice.textContent = "Historical data loaded, but replacement was declined. The existing dataset and paper state were preserved.";
+      return;
+    }
 
     const alignedMarks = new Set(data.marks.map((mark) => mark.time));
     const alignedCount = data.candles.filter((candle) => alignedMarks.has(candle.time)).length;
