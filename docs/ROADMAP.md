@@ -23,7 +23,8 @@
 - [x] Fetch historical funding-rate events for the loaded window.
 - [x] Add date-range pagination and bounded retries for Binance trade candles, mark-price candles, and funding history.
 - [x] Fetch historical mark-price candles so mark-to-market and liquidation checks use a better price source.
-- [ ] Harden CSV schema detection and error reporting.
+- [x] Report row numbers for malformed CSV candles and reject invalid timestamps.
+- [ ] Harden CSV schema detection for exchange-export variations.
 - [ ] Persist datasets locally for offline replay.
 - [x] Detect and report timestamp gaps in loaded Binance historical candles without fabricating replacement bars.
 - [ ] Validate imported CSV interval consistency and detect timestamp gaps.

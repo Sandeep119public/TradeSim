@@ -25,6 +25,9 @@ describe("validateCandles", () => {
 
   it("rejects invalid timestamps, prices, volume, and OHLC ranges", () => {
     expect(() => validateCandles([candle(-1)])).toThrow(/negative timestamp/);
+    expect(() => validateCandles([candle(1.5)])).toThrow(/safe integer millisecond/);
+    expect(() => validateCandles([candle(Number.MAX_SAFE_INTEGER + 1)])).toThrow(/safe integer millisecond/);
+    expect(() => validateCandles([candle(8_640_000_000_000_001)])).toThrow(/supported date range/);
     expect(() => validateCandles([candle(1, { open: 0 })])).toThrow(/non-positive price/);
     expect(() => validateCandles([candle(1, { volume: -1 })])).toThrow(/negative volume/);
     expect(() => validateCandles([candle(1, { high: 99 })])).toThrow(/inconsistent high/);

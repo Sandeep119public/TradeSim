@@ -12,7 +12,7 @@ import {
   type SupportedInterval,
 } from "./domain/historical-data";
 import type { MarkPriceCandle } from "./domain/mark-price";
-import type { Candle } from "./domain/market";
+import { validateCandles, type Candle } from "./domain/market";
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) throw new Error("Missing #app root");
@@ -65,27 +65,28 @@ app.innerHTML = `
       </div>
       <div class="chart-card">
         <div class="chart-meta"><span>PRICE ACTION</span><span id="ohlc">Waiting for replay</span></div>
-        <div id="chart" class="chart"></div>
+        <div id="chart" class="chart" role="region" aria-label="Paper replay candlestick chart"><div id="chart-empty" class="chart-empty" role="status" aria-live="polite"><div><span>READY TO REPLAY</span><strong>Price history appears as replay advances</strong><p>Press Play or +1 bar to begin. Future candles stay hidden until replay reaches them.</p></div></div></div>
         <div class="timeline"><div class="timeline-labels"><span id="start-time"></span><strong id="current-time"></strong><span id="end-time"></span></div><input id="seek" type="range" min="-1" max="119" value="-1" aria-label="Replay position"/></div>
         <div class="replay-controls"><button id="step-back" class="ghost">−1 bar</button><button id="play" class="primary">▶ Play</button><button id="step" class="ghost">+1 bar</button><label>Speed<select id="speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option></select></label><button id="load-binance" class="ghost">Load Binance data</button><input id="csv" type="file" accept=".csv,.txt" aria-label="Import CSV candles" hidden/><button id="import-csv" class="ghost">Import CSV</button></div>
         <p id="notice" class="notice" role="status">Demo dataset loaded. Fetch Binance futures candles or import a CSV.</p>
       </div>
       <section class="section-card">
-        <div class="section-title"><div><span class="eyebrow">ACCOUNT</span><h2>Paper account</h2></div><span class="paper-tag">NO REAL ORDERS</span></div><p>After an order fills, the entire fill candle is checked for risk exits. For a limit fill this conservatively includes OHLC movement that may have happened before the fill. Attached stop-loss and take-profit triggers use trade-price candle OHLC. Liquidation uses mark-price OHLC when available, otherwise trade OHLC. If liquidation and another exit are both touched in one candle, liquidation wins because their order is unknown; if both SL and TP are touched, SL wins. Maintenance margin is a simplified fixed 0.5%, not Binance's symbol-specific brackets.</p>
+        <div class="section-title"><div><span class="eyebrow">ACCOUNT</span><h2>Paper account</h2></div><span class="paper-tag">NO REAL ORDERS</span></div><details class="assumptions"><summary>Execution assumptions and limitations</summary><p>After an order fills, the entire fill candle is checked for risk exits. For a limit fill this conservatively includes OHLC movement that may have happened before the fill. Attached stop-loss and take-profit triggers use trade-price candle OHLC. Liquidation uses mark-price OHLC when available, otherwise trade OHLC. If liquidation and another exit are both touched in one candle, liquidation wins because their order is unknown; if both SL and TP are touched, SL wins. Maintenance margin is a simplified fixed 0.5%, not Binance's symbol-specific brackets.</p></details>
         <div class="stats-grid"><div><span>Wallet balance</span><strong id="wallet">$10,000.00</strong></div><div><span>Equity</span><strong id="equity">$10,000.00</strong></div><div><span>Unrealized P&amp;L</span><strong id="unrealized">$0.00</strong></div><div><span>Realized P&amp;L</span><strong id="realized">$0.00</strong></div><div><span>Used margin</span><strong id="margin">$0.00</strong></div><div><span>Available margin</span><strong id="available">$10,000.00</strong></div><div><span>Net funding</span><strong id="funding">$0.00</strong></div></div>
       </section>
     </section>
     <aside class="trade-column">
       <section class="section-card order-card">
         <div class="section-title"><div><span class="eyebrow">ORDER ENTRY</span><h2>Paper trade</h2></div><span class="paper-tag">SIM</span></div>
-        <div class="side-toggle"><button id="long" class="side-button selected-long" type="button">Long / Buy</button><button id="short" class="side-button" type="button">Short / Sell</button></div>
+        <div class="side-toggle" role="group" aria-label="Paper trade direction"><button id="long" class="side-button selected-long" type="button" aria-pressed="true">Long / Buy</button><button id="short" class="side-button" type="button" aria-pressed="false">Short / Sell</button></div>
         <label>Order type<select id="order-type"><option value="market">Market</option><option value="limit">Limit</option></select></label>
         <label>Quantity<input id="quantity" type="number" value="0.001" min="0.000001" step="any"/></label>
         <label>Leverage <strong id="lev-value">10×</strong><input id="leverage" type="range" min="1" max="50" value="10"/></label>
         <div class="preview"><div><span>Estimated notional</span><strong id="notional">$0.00</strong></div><div><span>Initial margin</span><strong id="initial-margin">$0.00</strong></div><div><span>Estimated entry fee</span><strong id="entry-fee">$0.00</strong></div></div>
         <div id="limit-wrap" hidden><label>Limit price<input id="limit-price" type="number" min="0" step="any"/></label></div>
         <div class="risk-grid"><label>Attached stop-loss<input id="sl-price" type="number" min="0" step="any" placeholder="Optional"/></label><label>Attached take-profit<input id="tp-price" type="number" min="0" step="any" placeholder="Optional"/></label></div>
-        <button id="submit" class="submit-long" type="button">Open Long</button>
+        <button id="submit" class="submit-long" type="button" aria-describedby="order-hint" disabled>Open Long</button>
+        <p id="order-hint" class="order-hint" hidden></p>
         <div class="position-box"><div class="section-title"><h3>Open position</h3><button id="close" class="ghost" disabled type="button">Close</button></div><div id="position-summary" class="empty">No open position</div></div>
         <div class="position-box"><div class="section-title"><h3>Order &amp; fill history</h3><button id="cancel-orders" class="ghost" type="button">Cancel pending</button></div><div id="activity-list" class="activity-list empty">No order activity yet</div></div>
       </section>
@@ -98,6 +99,11 @@ const el = <T extends HTMLElement>(id: string) => {
   if (!node) throw new Error(`Missing #${id}`);
   return node as T;
 };
+function setNotice(message: string, tone: "info" | "warning" | "error" = "info") {
+  const notice = el<HTMLElement>("notice");
+  notice.textContent = message;
+  notice.dataset.tone = tone;
+}
 const money = (n: number) => n.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const date = (n: number | null) => n === null ? "Not started" : new Date(n).toLocaleString();
 const chartHost = el<HTMLDivElement>("chart");
@@ -132,6 +138,7 @@ function drawChart() {
     open: c.open, high: c.high, low: c.low, close: c.close,
   })));
   const state = snapshot();
+  el<HTMLElement>("chart-empty").hidden = state.index >= 0;
   el<HTMLElement>("timestamp").textContent = state.timestamp === null ? "Replay has not started" : date(state.timestamp);
   el<HTMLElement>("current-time").textContent = state.timestamp === null ? "Not started" : date(state.timestamp);
   el<HTMLElement>("start-time").textContent = candles.length ? date(candles[0].time) : "";
@@ -145,6 +152,7 @@ function drawChart() {
     : "Waiting for replay";
   el<HTMLButtonElement>("play").textContent = state.status === "playing" ? "Ⅱ Pause" : "▶ Play";
   el<HTMLButtonElement>("step").disabled = state.index >= candles.length - 1;
+  el<HTMLButtonElement>("step-back").disabled = state.index <= -1;
   const acc = session.accountSnapshot();
   el<HTMLElement>("wallet").textContent = money(acc.walletBalance);
   el<HTMLElement>("equity").textContent = money(acc.equity);
@@ -159,6 +167,7 @@ function drawChart() {
     node.classList.toggle("negative", Number(node.textContent?.replace(/[^0-9.-]/g, "")) < 0);
   }
   updatePreview();
+  updateOrderAvailability();
   drawPosition();
   drawActivity();
 }
@@ -171,6 +180,29 @@ function updatePreview() {
   el<HTMLElement>("notional").textContent = money(notional);
   el<HTMLElement>("initial-margin").textContent = money(notional / leverage);
   el<HTMLElement>("entry-fee").textContent = money(notional * 0.0005);
+}
+function updateOrderAvailability() {
+  const state = snapshot();
+  const hasPendingOrder = session.ordersSnapshot().some((order) => order.status === "PENDING");
+  const hasPosition = session.accountSnapshot().position !== null;
+  const selectedDataMismatch = symbol !== marketDataSymbol || el<HTMLSelectElement>("timeframe").value !== marketDataInterval;
+  const hint = isHistoricalLoading
+    ? "Paper orders are paused while historical data loads."
+    : !state.candle
+    ? "Press Play or +1 bar to start replay before placing an order."
+    : selectedDataMismatch
+    ? "Load data for the selected market and timeframe before trading."
+    : state.index >= candles.length - 1
+    ? "Seek to an earlier candle to place a paper order."
+    : hasPosition
+    ? "Close the open position before placing another order."
+    : hasPendingOrder
+    ? "Cancel or wait for the pending order before placing another order."
+    : "";
+  const hintNode = el<HTMLElement>("order-hint");
+  hintNode.textContent = hint;
+  hintNode.hidden = hint.length === 0;
+  el<HTMLButtonElement>("submit").disabled = hint.length > 0;
 }
 function drawPosition() {
   const position = session.accountSnapshot().position;
@@ -217,9 +249,9 @@ function advanceOneBar() {
   const latestActivity = session.activitySnapshot()[0];
   if (latestActivity && (latestActivity.timestamp !== previousActivity?.timestamp || latestActivity.message !== previousActivity.message)) {
     if (latestActivity.message.startsWith("FUNDING SKIPPED")) {
-      el<HTMLElement>("notice").textContent = latestActivity.message;
+      setNotice(latestActivity.message, "warning");
     } else if (/^(STOP LOSS|TAKE PROFIT|LIQUIDATION)/.test(latestActivity.message)) {
-      el<HTMLElement>("notice").textContent = "Paper " + latestActivity.message + " under the documented OHLC exit policy.";
+      setNotice("Paper " + latestActivity.message + " under the documented OHLC exit policy.", "warning");
     }
   }
   drawChart();
@@ -236,9 +268,9 @@ function seekReplay(index: number) {
   if (isHistoricalLoading) return;
   stopTimer();
   session.seek(index);
-  el<HTMLElement>("notice").textContent = index < 0
+  setNotice(index < 0
     ? "Replay returned to the start. Recorded actions will replay as you move forward."
-    : "Paper state reconstructed through " + date(snapshot().timestamp) + ". A new action here will branch the timeline and replace later actions.";
+    : "Paper state reconstructed through " + date(snapshot().timestamp) + ". A new action here will branch the timeline and replace later actions.");
   drawChart();
 }
 function setData(
@@ -260,14 +292,17 @@ function setData(
   marketDataInterval = nextMarketInterval;
   session = nextSession;
   chart.timeScale().fitContent();
-  el<HTMLElement>("notice").textContent = message + " Funding without an event mark uses an exact-time mark open or a completed prior mark close; if neither is available, the settlement is skipped and logged.";
+  setNotice(message + " Funding without an event mark uses an exact-time mark open or a completed prior mark close; if neither is available, the settlement is skipped and logged.");
   drawChart();
 }
 function parseCsv(text: string): Candle[] {
-  const rows = text.trim().split(/\r?\n/);
-  if (!rows.length) throw new Error("CSV is empty");
-  const first = rows[0].toLowerCase();
-  const start = /time|timestamp|open/.test(first) ? 1 : 0;
+  const content = text.trim();
+  if (!content) throw new Error("CSV is empty");
+  const rows = content.split(/\r?\n/);
+  const headerCells = rows[0].split(/[;,\t]/).map((part) => part.trim().replace(/^"|"$/g, "").toLowerCase());
+  const hasHeader = ["time", "timestamp", "open_time", "datetime", "date"].includes(headerCells[0]) &&
+    ["open", "high", "low", "close", "volume"].every((column) => headerCells.includes(column));
+  const start = hasHeader ? 1 : 0;
   const parsed = rows.slice(start).map((line, index) => {
     const row = line.split(/[;,\t]/).map((part) => part.trim().replace(/^"|"$/g, ""));
     if (row.length < 6) throw new Error(`CSV row ${index + start + 1} needs time, open, high, low, close, volume`);
@@ -276,6 +311,18 @@ function parseCsv(text: string): Candle[] {
     if (time > 0 && time < 100_000_000_000) time *= 1000;
     return { time, open: Number(row[1]), high: Number(row[2]), low: Number(row[3]), close: Number(row[4]), volume: Number(row[5]) };
   });
+  if (parsed.length === 0) throw new Error("CSV contains a header but no candle rows");
+  try {
+    validateCandles(parsed);
+  } catch (error) {
+    if (error instanceof Error) {
+      const candleIndex = /^Candle (\d+) (.*)$/.exec(error.message);
+      if (candleIndex) throw new Error(`CSV row ${Number(candleIndex[1]) + start + 1}: ${candleIndex[2]}`);
+      const orderIndex = /index (\d+)\)$/.exec(error.message);
+      if (orderIndex) throw new Error(`CSV row ${Number(orderIndex[1]) + start + 1}: ${error.message}`);
+    }
+    throw error;
+  }
   return parsed;
 }
 async function fetchBinance() {
@@ -283,7 +330,6 @@ async function fetchBinance() {
   const sessionBeforeLoad = session;
   const currentState = session.snapshot();
   const cancelButton = el<HTMLButtonElement>("cancel-load");
-  const notice = el<HTMLElement>("notice");
   const controlIds = [
     "load-binance", "symbol", "timeframe", "range-start", "range-end", "csv", "import-csv",
     "play", "step", "step-back", "seek", "reset", "submit", "close", "cancel-orders",
@@ -302,7 +348,7 @@ async function fetchBinance() {
   controls.forEach((control) => { control.disabled = true; });
   cancelButton.hidden = false;
   cancelButton.disabled = false;
-  notice.textContent = "Preparing historical Binance Futures data request…";
+  setNotice("Preparing historical Binance Futures data request…");
   try {
     const interval = el<HTMLSelectElement>("timeframe").value as SupportedInterval;
     const pair = el<HTMLSelectElement>("symbol").value;
@@ -334,8 +380,8 @@ async function fetchBinance() {
       signal: loadController.signal,
       onProgress: (progress) => {
         if (generation !== historicalLoadGeneration || loadController.signal.aborted) return;
-        notice.textContent = "Loading " + progress.dataset + " · page " + progress.page +
-          " · " + progress.records.toLocaleString("en-US") + " record(s) collected…";
+        setNotice("Loading " + progress.dataset + " · page " + progress.page +
+          " · " + progress.records.toLocaleString("en-US") + " record(s) collected…");
       },
     });
 
@@ -348,7 +394,7 @@ async function fetchBinance() {
     if (hasStateToReplace && !window.confirm(
       "Loading a new dataset resets the current replay and paper-account history. Continue?",
     )) {
-      notice.textContent = "Historical data loaded, but replacement was declined. The existing dataset and paper state were preserved.";
+      setNotice("Historical data loaded, but replacement was declined. The existing dataset and paper state were preserved.", "warning");
       return;
     }
 
@@ -372,14 +418,14 @@ async function fetchBinance() {
   } catch (error) {
     if (generation !== historicalLoadGeneration) return;
     if (loadController.signal.aborted || error instanceof HistoricalLoadCancelledError) {
-      notice.textContent = "Historical data load cancelled. The existing dataset and paper state were preserved.";
+      setNotice("Historical data load cancelled. The existing dataset and paper state were preserved.", "warning");
     } else {
       const message = error instanceof Error ? error.message : String(error);
-      notice.textContent = error instanceof HistoricalRequestTimeoutError
+      setNotice(error instanceof HistoricalRequestTimeoutError
         ? "Binance request timed out: " + message + ". The existing dataset and paper state were preserved."
         : error instanceof HistoricalLoadTimeoutError
         ? message + ". The existing dataset and paper state were preserved."
-        : "Unable to load Binance data: " + message + ". The existing dataset and paper state were preserved.";
+        : "Unable to load Binance data: " + message + ". The existing dataset and paper state were preserved.", "error");
     }
   } finally {
     if (generation === historicalLoadGeneration) {
@@ -426,12 +472,13 @@ el<HTMLSelectElement>("symbol").addEventListener("change", (event) => {
   const pair = select.value;
   if (session.accountSnapshot().position || session.ordersSnapshot().some((order) => order.status === "PENDING")) {
     select.value = symbol;
-    el<HTMLElement>("notice").textContent = "Close the position and cancel pending orders before switching symbols.";
+    setNotice("Close the position and cancel pending orders before switching symbols.", "warning");
     return;
   }
   symbol = pair;
   el<HTMLElement>("symbol-title").textContent = `${symbol} PERPETUAL`;
-  el<HTMLElement>("notice").textContent = "Symbol selected. Fetch Binance candles to load its historical data.";
+  setNotice("Symbol selected. Fetch Binance candles to load its historical data.");
+  updateOrderAvailability();
 });
 el<HTMLSelectElement>("order-type").addEventListener("change", (event) => {
   if (isHistoricalLoading) return;
@@ -454,6 +501,9 @@ function updateSideUi() {
   const button = el<HTMLButtonElement>("submit");
   button.textContent = side === "LONG" ? "Open Long" : "Open Short";
   button.className = side === "LONG" ? "submit-long" : "submit-short";
+  el<HTMLButtonElement>("long").setAttribute("aria-pressed", String(side === "LONG"));
+  el<HTMLButtonElement>("short").setAttribute("aria-pressed", String(side === "SHORT"));
+  updateOrderAvailability();
 }
 el<HTMLButtonElement>("submit").addEventListener("click", () => {
   if (isHistoricalLoading) return;
@@ -499,12 +549,12 @@ el<HTMLButtonElement>("submit").addEventListener("click", () => {
       takeProfitPrice,
     };
     session.submitOrder(order);
-    el<HTMLElement>("notice").textContent = order.type === "market"
+    setNotice(order.type === "market"
       ? "Paper market order queued. It will fill at the next eligible candle open."
-      : "Paper limit order queued. It can fill only on a future candle that reaches the limit; OHLC fills are approximate.";
+      : "Paper limit order queued. It can fill only on a future candle that reaches the limit; OHLC fills are approximate.");
     drawChart();
   } catch (error) {
-    el<HTMLElement>("notice").textContent = error instanceof Error ? error.message : String(error);
+    setNotice(error instanceof Error ? error.message : String(error), "error");
   }
 });
 el<HTMLButtonElement>("close").addEventListener("click", () => {
@@ -514,27 +564,27 @@ el<HTMLButtonElement>("close").addEventListener("click", () => {
     if (!session.accountSnapshot().position) throw new Error("No open position");
     session.closePosition();
     const price = candles[snapshot().index].close;
-    el<HTMLElement>("notice").textContent = "Paper position closed at " + money(price) + ".";
+    setNotice("Paper position closed at " + money(price) + ".");
     drawChart();
   } catch (error) {
-    el<HTMLElement>("notice").textContent = error instanceof Error ? error.message : String(error);
+    setNotice(error instanceof Error ? error.message : String(error), "error");
   }
 });
 el<HTMLButtonElement>("reset").addEventListener("click", () => {
   if (isHistoricalLoading) return;
   session.resetAccount();
   drawChart();
-  el<HTMLElement>("notice").textContent = "Paper account and order history reset at the current replay position.";
+  setNotice("Paper account and order history reset at the current replay position.");
 });
 el<HTMLButtonElement>("cancel-orders").addEventListener("click", () => {
   if (isHistoricalLoading) return;
   const pending = session.ordersSnapshot().filter((order) => order.status === "PENDING");
   if (pending.length === 0) {
-    el<HTMLElement>("notice").textContent = "No pending orders to cancel.";
+    setNotice("No pending orders to cancel.", "warning");
     return;
   }
   session.cancelPendingOrders();
-  el<HTMLElement>("notice").textContent = "Cancelled pending order(s).";
+  setNotice("Cancelled pending order(s).");
   drawChart();
 });
 el<HTMLButtonElement>("load-binance").addEventListener("click", () => void fetchBinance());
@@ -552,7 +602,7 @@ el<HTMLInputElement>("csv").addEventListener("change", async (event) => {
   try {
     setData(parseCsv(await file.text()), `Imported ${file.name}. Replay is paused at the beginning.`);
   } catch (error) {
-    el<HTMLElement>("notice").textContent = error instanceof Error ? error.message : String(error);
+    setNotice(error instanceof Error ? error.message : String(error), "error");
   }
 });
 window.addEventListener("beforeunload", () => {
@@ -565,5 +615,6 @@ window.addEventListener("beforeunload", () => {
 setData(demo, "Demo data loaded. Fetch historical Binance futures candles or import a CSV.");
 el<HTMLSelectElement>("timeframe").addEventListener("change", () => {
   if (isHistoricalLoading) return;
-  el<HTMLElement>("notice").textContent = "Change timeframe, then fetch Binance candles to load that interval.";
+  setNotice("Change timeframe, then fetch Binance candles to load that interval.");
+  updateOrderAvailability();
 });
