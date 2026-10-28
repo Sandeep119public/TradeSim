@@ -87,8 +87,8 @@ export class ReplaySession {
     this.candleIntervalMs = candleIntervalMs;
     this.candles = candles.map((candle) => ({ ...candle }));
     this.replay.load(this.candles);
-    this.fundingEvents = [...fundingEvents].sort((a, b) => a.fundingTime - b.fundingTime);
-    this.markCandles = [...markCandles].sort((a, b) => a.time - b.time);
+    this.fundingEvents = this.normalizeFundingEvents(fundingEvents);
+    this.markCandles = this.normalizeMarkCandles(markCandles);
     this.marksByTime = new Map(this.markCandles.map((mark) => [mark.time, mark]));
     this.accountOptions = { ...account };
     this.account = new PaperAccount(this.accountOptions);
@@ -161,7 +161,7 @@ export class ReplaySession {
     const state = this.snapshot();
     if (!state.candle) throw new Error("Start replay before placing an order");
     if (state.index >= this.candles.length - 1) throw new Error("Replay is at the last candle");
-    this.recordUserAction({ kind: "submit", index: state.index, order });
+    this.recordUserAction({ kind: "submit", index: state.index, order: { ...order } });
   }
 
   closePosition(): void {
@@ -205,9 +205,9 @@ export class ReplaySession {
   private processPendingOrders(candle: Candle, index: number): void {
     for (const order of this.orders) {
       if (order.status !== "PENDING" || index <= order.createdIndex) continue;
-      const fillPrice = resolveFillPrice(order, candle, index);
-      if (fillPrice === null) continue;
       try {
+        const fillPrice = resolveFillPrice(order, candle, index);
+        if (fillPrice === null) continue;
         this.account.open({
           symbol: order.symbol,
           side: order.side,
@@ -330,6 +330,46 @@ export class ReplaySession {
 
   private validPrice(value: number | null): value is number {
     return value !== null && Number.isFinite(value) && value > 0;
+  }
+
+  private normalizeFundingEvents(events: readonly HistoricalFunding[]): HistoricalFunding[] {
+    const sorted = events.map((event) => ({ ...event })).sort((a, b) => a.fundingTime - b.fundingTime);
+    const result: HistoricalFunding[] = [];
+    for (const event of sorted) {
+      if (!Number.isSafeInteger(event.fundingTime) || event.fundingTime < 0) {
+        throw new RangeError("Funding timestamp must be a safe non-negative integer");
+      }
+      if (!Number.isFinite(event.fundingRate)) throw new RangeError("Funding rate must be finite");
+      if (event.markPrice !== null && !this.validPrice(event.markPrice)) event.markPrice = null;
+
+      const previous = result[result.length - 1];
+      if (previous?.fundingTime === event.fundingTime) {
+        if (previous.fundingRate !== event.fundingRate || previous.markPrice !== event.markPrice) {
+          throw new RangeError("Conflicting funding events share a settlement timestamp");
+        }
+        continue;
+      }
+      result.push(event);
+    }
+    return result;
+  }
+
+  private normalizeMarkCandles(candles: readonly MarkPriceCandle[]): MarkPriceCandle[] {
+    const sorted = candles.map((candle) => ({ ...candle })).sort((a, b) => a.time - b.time);
+    let previousTime = -1;
+    for (const candle of sorted) {
+      if (!Number.isSafeInteger(candle.time) || candle.time < 0 || candle.time <= previousTime) {
+        throw new RangeError("Mark-price candle timestamps must be safe non-negative integers and unique");
+      }
+      if (![candle.open, candle.high, candle.low, candle.close].every((price) => Number.isFinite(price) && price > 0)) {
+        throw new RangeError("Mark-price candles must contain finite positive prices");
+      }
+      if (candle.high < Math.max(candle.open, candle.close, candle.low) || candle.low > Math.min(candle.open, candle.close, candle.high)) {
+        throw new RangeError("Mark-price candle has an inconsistent OHLC range");
+      }
+      previousTime = candle.time;
+    }
+    return sorted;
   }
 
   private money(value: number): string {
