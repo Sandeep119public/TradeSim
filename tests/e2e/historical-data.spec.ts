@@ -142,6 +142,54 @@ test("paginates a 1,001-candle range and locks selection controls while fetching
   expect(requests.get("/fapi/v1/fundingRate")).toBe(1);
 });
 
+test("explains the initial chart state, disables unavailable order actions, and fits a narrow screen", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("#chart-empty")).toBeVisible();
+  await expect(page.locator("#chart-empty")).toContainText("Press Play or +1 bar to begin");
+  await expect(page.locator("#submit")).toBeDisabled();
+  await expect(page.locator("#order-hint")).toContainText("start replay before placing an order");
+  await expect(page.locator("#step-back")).toBeDisabled();
+
+  await page.setViewportSize({ width: 320, height: 740 });
+  const hasHorizontalOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+  expect(hasHorizontalOverflow).toBe(false);
+
+  await page.locator("#step").click();
+  await expect(page.locator("#chart-empty")).toBeHidden();
+  await expect(page.locator("#submit")).toBeEnabled();
+  await expect(page.locator("#order-hint")).toBeHidden();
+  await expect(page.locator("#step-back")).toBeEnabled();
+  let focusedId = "";
+  for (let attempt = 0; attempt < 20 && focusedId !== "submit"; attempt += 1) {
+    await page.keyboard.press("Tab");
+    focusedId = await page.evaluate(() => (document.activeElement as HTMLElement | null)?.id ?? "");
+  }
+  expect(focusedId).toBe("submit");
+  await expect.poll(() => page.locator("#submit").evaluate((button) => getComputedStyle(button).outlineStyle)).toBe("solid");
+});
+
+test("reports invalid CSV timestamps with a row number and keeps the loaded session", async ({ page }) => {
+  await page.goto("/");
+  await page.locator("#csv").setInputFiles({
+    name: "fractional-time.csv",
+    mimeType: "text/csv",
+    buffer: Buffer.from("time,open,high,low,close,volume\n1735689600000.5,100,105,95,101,10\n"),
+  });
+
+  await expect(page.locator("#notice")).toHaveAttribute("data-tone", "error");
+  await expect(page.locator("#notice")).toContainText("CSV row 2: timestamp must be a safe integer millisecond value");
+  await expect(page.locator("#current-time")).toHaveText("Not started");
+  await expect(page.locator("#seek")).toHaveAttribute("max", "119");
+
+  await page.locator("#csv").setInputFiles({
+    name: "timestamped-value.csv",
+    mimeType: "text/csv",
+    buffer: Buffer.from("timestamped,100,105,95,101,10\n"),
+  });
+  await expect(page.locator("#notice")).toContainText("CSV row 1: timestamp must be a safe integer millisecond value");
+  await expect(page.locator("#seek")).toHaveAttribute("max", "119");
+});
+
 test("keeps trade candles usable and reports gaps when optional endpoints fail", async ({ page }) => {
   const startDate = new Date(Date.UTC(2025, 0, 2, 0, 0));
   const candleTimes = [
@@ -252,9 +300,11 @@ test("preserves paper state during a gated load and asks before replacing it", a
   await expect(page.locator("#activity-list")).toHaveText("No order activity yet");
   await expect(page.locator("#wallet")).toHaveText("$10,000.00");
   for (const id of lockedIds) {
-    if (id === "close") continue;
+    if (id === "close" || id === "step-back" || id === "submit") continue;
     await expect(page.locator("#" + id)).toBeEnabled();
   }
+  await expect(page.locator("#step-back")).toBeDisabled();
+  await expect(page.locator("#submit")).toBeDisabled();
   await expect(page.locator("#close")).toBeDisabled();
   await expect(page.locator("#cancel-load")).toBeHidden();
 });
@@ -279,9 +329,10 @@ test("restores loading controls after a required candle request fails", async ({
   await page.locator("#load-binance").click();
 
   await expect(page.locator("#notice")).toContainText("Unable to load Binance data: Binance returned HTTP 400");
-  for (const id of ["load-binance", "symbol", "timeframe", "range-start", "range-end", "csv", "import-csv", "play", "step", "step-back", "seek", "reset", "submit", "cancel-orders"]) {
+  for (const id of ["load-binance", "symbol", "timeframe", "range-start", "range-end", "csv", "import-csv", "play", "step", "step-back", "seek", "reset", "cancel-orders"]) {
     await expect(page.locator("#" + id)).toBeEnabled();
   }
+  await expect(page.locator("#submit")).toBeDisabled();
   await expect(page.locator("#close")).toBeEnabled();
   await expect(page.locator("#cancel-load")).toBeHidden();
   await expect(page.locator("#current-time")).toHaveText(oldCurrentTime ?? "");
@@ -413,7 +464,7 @@ test("times out a stalled request and restores the interface", async ({ page }) 
   await expect(page.locator("#load-binance")).toBeEnabled();
   await expect(page.locator("#symbol")).toBeEnabled();
   await expect(page.locator("#play")).toBeEnabled();
-  await expect(page.locator("#submit")).toBeEnabled();
+  await expect(page.locator("#submit")).toBeDisabled();
   await expect(page.locator("#cancel-load")).toBeHidden();
   await expect(page.locator("#current-time")).toHaveText("Not started");
 });

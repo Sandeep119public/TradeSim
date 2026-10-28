@@ -46,5 +46,29 @@ input[type=range]{accent-color:#a5f04c;padding:0}
 .activity-time{color:#7889a2;font-size:10px;font-family:"DM Mono",monospace}
 .activity-row .positive{color:#8be3a4}.activity-row .negative{color:#ff8797}
 
+:root{color-scheme:dark;--focus:#d4ff8a;--surface-raised:#142033;--surface-border:#34445c}
+button:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+button:not(:disabled):hover{border-color:#5a708f;background:#1a2940}
+button.primary:not(:disabled):hover{background:#b7ff69!important;border-color:#b7ff69!important}
+button.submit-long:not(:disabled):hover{background:#b7ff69}
+button.submit-short:not(:disabled):hover{background:#ff7a8b}
+button:disabled{cursor:not-allowed}
+.chart{position:relative;overflow:hidden}
+.chart-empty{position:absolute;inset:0;z-index:2;display:grid;place-items:center;padding:18px;pointer-events:none;text-align:center}
+.chart-empty[hidden]{display:none}
+.chart-empty>div{max-width:360px;padding:20px 22px;border:1px solid #293950;border-radius:12px;background:rgba(13,21,34,.94);box-shadow:0 12px 36px rgba(0,0,0,.22)}
+.chart-empty span{display:block;margin-bottom:9px;color:#a5f04c;font-size:9px;font-weight:800;letter-spacing:.16em}
+.chart-empty strong{display:block;color:#e5eaf4;font-size:14px;letter-spacing:-.02em}
+.chart-empty p{margin:8px 0 0;font-size:11px;line-height:1.6}
+.notice[data-tone="warning"]{border-color:#715b2f;background:#241f16;color:#f2d58a}
+.notice[data-tone="error"]{border-color:#75404a;background:#29191e;color:#ffb6bf}
+.submit-long:disabled,.submit-short:disabled{opacity:1;background:#263447;color:#aebace;border:1px solid #3a4b64}
+.order-hint{margin:-5px 0 0;color:#9aa9bd;font-size:10px;line-height:1.5}
+.assumptions{margin:-4px 0 14px;color:#a8b4c5}
+.assumptions summary{width:max-content;max-width:100%;color:#a5f04c;font-size:11px;font-weight:700;cursor:pointer}
+.assumptions p{max-width:100ch;margin:10px 0 0;line-height:1.65}
+@media(max-width:500px){.chart-empty{padding:10px}.chart-empty>div{padding:15px}.chart-empty strong{font-size:12px}.assumptions summary{font-size:10px}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
+
 .risk-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .risk-grid input{font-family:"DM Mono",monospace}
