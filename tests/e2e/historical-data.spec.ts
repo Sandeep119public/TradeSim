@@ -159,6 +159,19 @@ test("explains the initial chart state, disables unavailable order actions, and 
   await expect(page.locator("#submit")).toBeEnabled();
   await expect(page.locator("#order-hint")).toBeHidden();
   await expect(page.locator("#step-back")).toBeEnabled();
+
+  const chartFitsContainer = () =>
+    page.evaluate(() => {
+      const host = document.querySelector<HTMLElement>("#chart");
+      if (!host) return false;
+      const boxes = [...host.querySelectorAll("canvas")].map((canvas) => canvas.getBoundingClientRect());
+      const top = Math.min(...boxes.map((box) => box.top));
+      const bottom = Math.max(...boxes.map((box) => box.bottom));
+      return boxes.length > 0 && bottom - top <= host.clientHeight + 1;
+    });
+  await expect.poll(chartFitsContainer).toBe(true);
+  await page.setViewportSize({ width: 800, height: 900 });
+  await expect.poll(chartFitsContainer).toBe(true);
   let focusedId = "";
   for (let attempt = 0; attempt < 20 && focusedId !== "submit"; attempt += 1) {
     await page.keyboard.press("Tab");

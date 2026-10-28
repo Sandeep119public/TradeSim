@@ -109,7 +109,7 @@ const date = (n: number | null) => n === null ? "Not started" : new Date(n).toLo
 const chartHost = el<HTMLDivElement>("chart");
 const chart: IChartApi = createChart(chartHost, {
   width: chartHost.clientWidth,
-  height: 370,
+  height: chartHost.clientHeight,
   layout: { background: { color: "#0d1522" }, textColor: "#8290a6" },
   grid: { vertLines: { color: "#1c2939" }, horzLines: { color: "#1c2939" } },
   rightPriceScale: { borderColor: "#263449" },
@@ -119,7 +119,7 @@ const series: ISeriesApi<"Candlestick"> = chart.addSeries(CandlestickSeries, {
   upColor: "#a5f04c", downColor: "#f15b70", borderUpColor: "#a5f04c",
   borderDownColor: "#f15b70", wickUpColor: "#a5f04c", wickDownColor: "#f15b70",
 });
-const resizeObserver = new ResizeObserver(() => chart.applyOptions({ width: chartHost.clientWidth }));
+const resizeObserver = new ResizeObserver(() => chart.applyOptions({ width: chartHost.clientWidth, height: chartHost.clientHeight }));
 resizeObserver.observe(chartHost);
 
 function stopTimer() {
